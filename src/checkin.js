@@ -195,33 +195,54 @@ if (!USERNAME || !PASSWORD) {
     await page.fill('input[type="password"]', PASSWORD);
     console.log('    ✅ 密码已填入');
 
-    // 3. 点击登录
-    console.log('[3/5] 点击登录...');
-    let loginClicked = false;
-    const loginSelectors = [
-      'button:has-text("登录")',
-      'input[type="submit"]',
-      'button[type="submit"]',
-      'button:has-text("Login")',
-      'button:has-text("Sign in")'
-    ];
-    for (const selector of loginSelectors) {
-      try {
-        await Promise.all([
-          page.waitForRequest(req => req.url().includes('/api/user/self') && req.method() === 'GET'),
-          page.click(selector, { timeout: 5000 })
-        ]);
-        loginClicked = true;
-        console.log(`    ✅ 登录按钮已点击 (selector: ${selector})`);
-        break;
-      } catch (e) {
-        // 继续尝试下一个选择器
-      }
+    // 3. 提交表单（尝试按 Enter 键提交）
+    console.log('[3/5] 提交表单...');
+    let submitted = false;
+    // Try pressing Enter in the password field
+    try {
+        await page.press('input[type="password"]', 'Enter', { timeout: 5000 });
+        submitted = true;
+        console.log('    ✅ 已在密码框按 Enter 提交');
+    } catch (e) {
+        // Try pressing Enter on the body
+        try {
+            await page.press('body', 'Enter', { timeout: 5000 });
+            submitted = true;
+            console.log('    ✅ 已在 body 按 Enter 提交');
+        } catch (e2) {
+            console.warn('    ⚠️ 按 Enter 提交失败:', e2.message);
+        }
     }
-    if (!loginClicked) {
-      console.error('    ❌ 无法找到登录按钮');
-      await browser.close();
-      process.exit(1);
+
+    if (!submitted) {
+        // 如果按 Enter 失败，尝试查找并点击登录按钮
+        console.log('    尝试查找登录按钮...');
+        let loginClicked = false;
+        const loginSelectors = [
+          'button:has-text("登录")',
+          'input[type="submit"]',
+          'button[type="submit"]',
+          'button:has-text("Login")',
+          'button:has-text("Sign in")'
+        ];
+        for (const selector of loginSelectors) {
+          try {
+            await Promise.all([
+              page.waitForRequest(req => req.url().includes('/api/user/self') && req.method() === 'GET'),
+              page.click(selector, { timeout: 5000 })
+            ]);
+            loginClicked = true;
+            console.log(`    ✅ 登录按钮已点击 (selector: ${selector})`);
+            break;
+          } catch (e) {
+            // 继续尝试下一个选择器
+          }
+        }
+        if (!loginClicked) {
+          console.error('    ❌ 无法找到登录按钮');
+          await browser.close();
+          process.exit(1);
+        }
     }
 
     // 4. 等待登录成功（等待 /api/user/self 返回 200）
