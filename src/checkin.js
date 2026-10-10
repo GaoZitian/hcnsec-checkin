@@ -1,6 +1,6 @@
 /**
  * HCNSec 每日签到脚本
- * 功能 بينما:
+ * 功能 mientras:
  *   1. 优先使用已保存的 Playwright storageState（Cookie + localStorage）
  *   2. 如果没有保存的状态，使用 GitHub Secrets 里的账号密码自动登录
  *   3. 登录成功后保存 storageState，供下次使用
@@ -192,95 +192,30 @@ if (!USERNAME || !PASSWORD) {
       process.exit(1);
     }
     
-    // Check the checkbox before submitting - SIMPLIFIED APPROACH
-    console.log('[2.5/5] 检查同意条款...');
-    let checkboxChecked = false;
-    try {
-      // Based on the HTML, the checkbox is a direct sibling of the text
-      // Try the most direct approach first: find by the exact text content
-      const checkboxSelectors = [
-        // Try to find the label by exact text and click it
-        'label:has-text("我已阅读并同意 用户协议 and the 隐私政策.")',
-        'label:has-text("我已阅读并同意 用户协议 and the 隐私政策")',
-        // Try to find the checkbox directly by its associated text via XPath
-        '//label[text()="我已阅读并同意 用户协议 and the 隐私政策."]/preceding-sibling::input[@type="checkbox"]',
-        '//label[text()="我已阅读并同意 用户协议 and the 隐私政策."]/following-sibling::input[@type="checkbox"]',
-        '//label[contains(text(),"我已阅读并同意 用户协议")]/preceding-sibling::input[@type="checkbox"]',
-        '//label[contains(text(),"我已阅读并同意 用户协议")]/following-sibling::input[@type="checkbox"]',
-        // Try to find by placeholder-like attributes
-        'input[type="checkbox"][aria-label*="同意"]',
-        'input[type="checkbox"][aria-label*="同意条款"]',
-        // Fallback to any checkbox and then verify by checking nearby text
-        'input[type="checkbox"]'
-      ];
-      
-      for (const selector of checkboxSelectors) {
-        try {
-          console.log(`    尝试选择器: ${selector.substring(0, 60)}...`);
-          await page.waitForSelector(selector, { state: 'attached', timeout: 3000 });
-          
-          if (selector.startsWith('//') || selector.startsWith('label:')) {
-            // For XPath or label selectors, click the label
-            await page.click(selector, { timeout: 3000 });
-          } else {
-            // For direct input selectors, check the checkbox
-            await page.check(selector, { timeout: 3000 });
-          }
-          
-          // Verify it's checked
-          const isChecked = await page.isChecked(selector.startsWith('//') || selector.startsWith('label:') 
-            ? selector.replace(/^label:/, '').replace(/^\/label\[/, '//label[') 
-            : selector);
-          if (isChecked) {
-            console.log('    ✅ 已勾选同意条款');
-            checkboxChecked = true;
-            break;
-          }
-        } catch (e) {
-          console.log(`    ⚠️ 选择器失败: ${selector.substring(0, 40)}...`);
-          // Continue to next selector
-        }
-      }
-      
-      // Final fallback: try to click the text directly
-      if (!checkboxChecked) {
-        try {
-          console.log('    尝试直接点击文本...');
-          await page.click('text=我已阅读并同意 用户协议 and the 隐私政策.', { timeout: 3000 });
-          checkboxChecked = true;
-          console.log('    ✅ 已通过文本点击勾选同意条款');
-        } catch (e) {
-          console.log('    ⚠️ 直接点击文本失败');
-        }
-      }
-      
-      // Additional wait to see if button gets enabled
-      if (checkboxChecked) {
-        await page.waitForTimeout(1000);
-        // Check if login button is now enabled
-        const loginButton = await page.$('button:has-text("登录")');
-        if (loginButton) {
-          const isDisabled = await loginButton.evaluate(el => el.disabled);
-          if (!isDisabled) {
-            console.log('    ✅ 登录按钮已启用');
-          } else {
-            console.log('    ⚠️ 登录按钮仍然禁用，但将继续尝试');
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('    ⚠️ 检查同意条款时出错:', e.message);
-    }
-    
-    if (!checkboxChecked) {
-      console.warn('    ⚠️ 未能勾选同意复选框，将尝试继续登录（按钮可能仍然禁用）');
-    }
-    
     await page.fill('input[type="password"]', PASSWORD);
     console.log('    ✅ 密码已填入');
 
-    // 尝试提交表单（先尝试 Enter 键，然后尝试点击登录按钮）
-    console.log('[3/5] 尝试提交表单...');
+    // 3. 勾选同意条款
+    console.log('[2.5/5] 勾选同意条款...');
+    try {
+      // Use role-based selector for the checkbox
+      const checkbox = page.getByRole('checkbox', { name: /我已阅读并同意 用户协议 and the 隐私政策\.?/ });
+      await checkbox.check({ timeout: 5000 });
+      console.log('    ✅ 已勾选同意条款');
+      
+      // Wait for login button to become enabled
+      await page.waitForFunction(() => {
+        const btn = document.querySelector('button:has-text("登录")');
+        return btn && !btn.disabled;
+      }, { timeout: 5000 });
+      console.log('    ✅ 登录按钮已启用');
+    } catch (e) {
+      console.warn('    ⚠️ 勾选同意条款时出错:', e.message);
+      // Continue anyway; maybe button already enabled
+    }
+    
+    // 4. 提交表单
+    console.log('[3/5] 提交表单...');
     let loginSuccess = false;
     
     // Function to check if we're logged in by trying to access /api/user/self
@@ -321,56 +256,18 @@ if (!USERNAME || !PASSWORD) {
     // 2. 如果 Enter 未成功，尝试点击登录按钮
     if (!loginSuccess) {
       console.log('    尝试查找并点击登录按钮...');
-      let loginClicked = false;
-      
-      // More comprehensive selector list for login button
-      const loginSelectors = [
-        'button:has-text("登录")',
-        'input[type="submit"]',
-        'button[type="submit"]',
-        'button:has-text("Login")',
-        'button:has-text("Sign in")',
-        'button:has-text("确定")',
-        'button:has-text("提交")',
-        '[role="button"]:has-text("登录")',
-        '[role="button"]:has-text("Login")',
-        '.btn:has-text("登录")',
-        '.button:has-text("登录")',
-        'button[class*="btn"]:has-text("登录")',
-        'button[class*="submit"]',
-        'button[class*="login"]'
-      ];
-      
-      for (const selector of loginSelectors) {
-        try {
-          // Wait for the button to be visible
-          await page.waitForSelector(selector, { state: 'visible', timeout: 3000 });
-          // Click and wait for navigation or response
-          await Promise.all([
-            page.waitForResponse(resp => resp.url().includes('/api/user/self') && resp.status() === 200, { timeout: 10000 }),
-            page.click(selector, { timeout: 5000 })
-          ]);
-          loginClicked = true;
-          console.log(`    ✅ 登录按钮已点击 (selector: ${selector})`);
-          break;
-        } catch (e) {
-          // Continue to next selector
-        }
-      }
-      
-      if (!loginClicked) {
-        console.error('    ❌ 无法找到登录按钮');
-        await browser.close();
-        process.exit(1);
-      }
-      
-      // Additional wait after button click
-      await page.waitForTimeout(2000);
-      if (await checkLoginStatus()) {
+      try {
+        // Wait for login button to be visible and enabled
+        await page.waitForSelector('button:has-text("登录"):not([disabled])', { timeout: 5000 });
+        await page.click('button:has-text("登录")', { timeout: 5000 });
+        console.log('    ✅ 登录按钮已点击');
+        
+        // Wait for navigation or response indicating login
+        await page.waitForResponse(resp => resp.url().includes('/api/user/self') && resp.status() === 200, { timeout: 10000 });
         console.log('    ✅ 检测到登录成功响应 (/api/user/self)');
         loginSuccess = true;
-      } else {
-        console.error('    ❌ 登录按钮点击后仍未触发登录响应');
+      } catch (e) {
+        console.error('    ❌ 无法找到或点击登录按钮:', e.message);
         await browser.close();
         process.exit(1);
       }
@@ -383,7 +280,7 @@ if (!USERNAME || !PASSWORD) {
       process.exit(1);
     }
     
-    // 4. 等待登录成功（等待 /api/user/self 返回 200）
+    // 5. 等待登录成功（等待 /api/user/self 返回 200）
     console.log('[4/5] 等待登录验证...');
     try {
       await page.waitForResponse(async (resp) => {
@@ -396,7 +293,7 @@ if (!USERNAME || !PASSWORD) {
       process.exit(1);
     }
     
-    // 5. 保存 storageState 供下次使用
+    // 6. 保存 storageState 供下次使用
     console.log('[5/5] 保存登录状态，供下次使用...');
     // 确保目录存在
     const fs = await import('fs');
