@@ -153,9 +153,17 @@ if (!USERNAME || !PASSWORD) {
     const context = await browser.newContext();
     const page = await context.newPage();
 
+    // 设置更长的默认超时
+    page.setDefaultTimeout(60000);
+    page.setDefaultNavigationTimeout(60000);
+
     // 1. 打开登录页
     console.log('[1/5] 打开登录页...');
-    await page.goto('https://api.hcnsec.cn/login', { waitUntil: 'networkidle' });
+    try {
+      await page.goto('https://api.hcnsec.cn/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    } catch (e) {
+      console.warn('[WARN] 页面加载超时，尝试继续...', e.message);
+    }
 
     // 2. 填入账号密码
     console.log('[2/5] 填入用户名和密码...');
@@ -185,6 +193,11 @@ if (!USERNAME || !PASSWORD) {
 
     // 5. 保存 storageState 供下次使用
     console.log('[5/5] 保存登录状态，供下次使用...');
+    // 确保目录存在
+    const fs = await import('fs');
+    if (!fs.existsSync('.playwright')) {
+      fs.mkdirSync('.playwright', { recursive: true });
+    }
     await context.storageState({ path: '.playwright/storageState.json' });
     console.log('    ✅ 状态已保存到 .playwright/storageState.json');
 
