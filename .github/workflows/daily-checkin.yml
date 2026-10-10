@@ -1,0 +1,50 @@
+name: HCNSec Daily Check-in
+
+on:
+  schedule:
+    # 每天北京时间 09:10（UTC 01:10）
+    - cron: '10 1 * * *'
+  workflow_dispatch:
+
+jobs:
+  checkin:
+    name: Sign in
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # GitHub Secrets: HCNSEC_USERNAME, HCNSEC_PASSWORD (必填)
+      #           HCNSEC_NEW_API_USER（可选，如果已知可填，未填脚本会自动探测）
+    defaults:
+      run:
+        working-directory: ./src
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------------------------------------------------------
+      # 1. 安装 Node.js
+      # ---------------------------------------------------------
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ---------------------------------------------------------
+      # 2. 安装项目依赖
+      # ---------------------------------------------------------
+      - name: Install dependencies
+        run: npm ci
+        # 注意：首次运行 npm ci 会自动安装 playwright 二进制;
+        # 之后缓存将复用，速度极快。
+
+      # ---------------------------------------------------------
+      # 3. 安装 Playwright 浏览器二进制
+      # ---------------------------------------------------------
+      - name: Install Playwright browsers
+        uses: playwright/setup-playwright-action@v2
+
+      # ---------------------------------------------------------
+      # 4. 运行签到脚本
+      # ---------------------------------------------------------
+      - name: Run HCNSec check-in
+        run: node checkin.js
+        # 如果筛选器有问题或需要调试，可加 --debug 标志
+        # env: HCNSEC_DEBUG=1
