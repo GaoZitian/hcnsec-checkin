@@ -12,8 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # GitHub Secrets: HCNSEC_USERNAME, HCNSEC_PASSWORD (必填)
-      #           HCNSEC_NEW_API_USER（可选，如果已知可填，未填脚本会自动探测）
+      HCNSEC_USERNAME: ${{ secrets.HCNSEC_USERNAME }}
+      HCNSEC_PASSWORD: ${{ secrets.HCNSEC_PASSWORD }}
     defaults:
       run:
         working-directory: ./src
@@ -46,5 +46,3 @@ jobs:
       # ---------------------------------------------------------
       - name: Run HCNSec check-in
         run: node checkin.js
-        # 如果筛选器有问题或需要调试，可加 --debug 标志
-        # env: HCNSEC_DEBUG=1
