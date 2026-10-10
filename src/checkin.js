@@ -213,7 +213,31 @@ if (!USERNAME || !PASSWORD) {
         // We'll try to continue and see if we can click the login button anyway
     }
     
-    // 4. 提交表单
+    // 4. 处理 Cloudflare 验证（如果出现）
+    console.log('[2.6/5] 检查 Cloudflare 验证...');
+    try {
+        // Check if Cloudflare iframe is present
+        const iframe = await page.waitForSelector('iframe[ref="e14"]', { timeout: 5000 });
+        if (iframe) {
+            console.log('    检测到 Cloudflare 验证 iframe');
+            // Wait for the iframe to load
+            await iframe.waitForElementState('stable', { timeout: 5000 });
+            // Get the iframe's frame
+            const frame = iframe.contentFrame();
+            if (frame) {
+                // Check the checkbox inside the iframe: "请验证您是真人" [ref=e22]
+                await frame.check('checkbox[ref="e22"]', { timeout: 5000 });
+                console.log('    ✅ 已勾选 Cloudflare 验证复选框');
+                // Optionally wait a bit for the challenge to complete
+                await page.waitForTimeout(3000);
+            }
+        }
+    } catch (e) {
+        // No Cloudflare iframe found, or already passed
+        console.log('    未检测到 Cloudflare 验证 iframe，或已通过');
+    }
+    
+    // 5. 提交表单
     console.log('[3/5] 提交表单...');
     let loginSuccess = false;
     try {
@@ -238,7 +262,7 @@ if (!USERNAME || !PASSWORD) {
       process.exit(1);
     }
     
-    // 5. 等待登录成功（等待 /api/user/self 返回 200）
+    // 6. 等待登录成功（等待 /api/user/self 返回 200）
     console.log('[4/5] 等待登录验证...');
     try {
       await page.waitForResponse(async (resp) => {
@@ -251,7 +275,7 @@ if (!USERNAME || !PASSWORD) {
       process.exit(1);
     }
     
-    // 6. 保存 storageState 供下次使用
+    // 7. 保存 storageState 供下次使用
     console.log('[5/5] 保存登录状态，供下次使用...');
     // 确保目录存在
     const fs = await import('fs');
