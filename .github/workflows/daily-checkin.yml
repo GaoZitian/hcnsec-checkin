@@ -32,7 +32,7 @@ jobs:
       # ---------------------------------------------------------
       - name: Install dependencies and browsers
         run: |
-          npm ci
+          npm install
           npx playwright install --with-deps
 
       # ---------------------------------------------------------
