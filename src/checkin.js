@@ -167,16 +167,62 @@ if (!USERNAME || !PASSWORD) {
 
     // 2. 填入账号密码
     console.log('[2/5] 填入用户名和密码...');
-    // 这里使用通用的输入选择器，实际站点可能需要调整
-    await page.fill('input[placeholder*="username"] || input[placeholder*="user"] || input[name="username"]', USERNAME);
+    // 尝试多个可能的用户名输入框选择器
+    let usernameFilled = false;
+    const usernameSelectors = [
+      'input[placeholder*="username"]',
+      'input[placeholder*="user"]',
+      'input[name="username"]',
+      'input[type="text"]',
+      'input[type="email"]'
+    ];
+    for (const selector of usernameSelectors) {
+      try {
+        await page.fill(selector, USERNAME, { timeout: 5000 });
+        usernameFilled = true;
+        console.log(`    ✅ 用户名已填入 (selector: ${selector})`);
+        break;
+      } catch (e) {
+        // 继续尝试下一个选择器
+      }
+    }
+    if (!usernameFilled) {
+      console.error('    ❌ 无法找到用户名输入框');
+      await browser.close();
+      process.exit(1);
+    }
+    
     await page.fill('input[type="password"]', PASSWORD);
+    console.log('    ✅ 密码已填入');
 
     // 3. 点击登录
     console.log('[3/5] 点击登录...');
-    const [request] = await Promise.all([
-      page.waitForRequest(req => req.url().includes('/api/user/self') && req.method() === 'GET'),
-      await page.click('button:has-text("登录") || input[type="submit"]')
-    ]);
+    let loginClicked = false;
+    const loginSelectors = [
+      'button:has-text("登录")',
+      'input[type="submit"]',
+      'button[type="submit"]',
+      'button:has-text("Login")',
+      'button:has-text("Sign in")'
+    ];
+    for (const selector of loginSelectors) {
+      try {
+        await Promise.all([
+          page.waitForRequest(req => req.url().includes('/api/user/self') && req.method() === 'GET'),
+          page.click(selector, { timeout: 5000 })
+        ]);
+        loginClicked = true;
+        console.log(`    ✅ 登录按钮已点击 (selector: ${selector})`);
+        break;
+      } catch (e) {
+        // 继续尝试下一个选择器
+      }
+    }
+    if (!loginClicked) {
+      console.error('    ❌ 无法找到登录按钮');
+      await browser.close();
+      process.exit(1);
+    }
 
     // 4. 等待登录成功（等待 /api/user/self 返回 200）
     console.log('[4/5] 等待登录验证...');
