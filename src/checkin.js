@@ -195,54 +195,78 @@ if (!USERNAME || !PASSWORD) {
     await page.fill('input[type="password"]', PASSWORD);
     console.log('    ✅ 密码已填入');
 
-    // 3. 提交表单（尝试按 Enter 键提交）
-    console.log('[3/5] 提交表单...');
-    let submitted = false;
-    // Try pressing Enter in the password field
+    // 尝试提交表单（先尝试 Enter 键，然后尝试点击登录按钮）
+    console.log('[3/5] 尝试提交表单...');
+    let loginSuccess = false;
+    const waitForLoginResponse = async () => {
+      return page.waitForResponse(async (resp) => {
+        return resp.url().includes('/api/user/self') && resp.status() === 200;
+      }, { timeout: 15000 });
+    };
+
+    // 1. 尝试通过 Enter 键提交
     try {
-        await page.press('input[type="password"]', 'Enter', { timeout: 5000 });
-        submitted = true;
-        console.log('    ✅ 已在密码框按 Enter 提交');
+      await page.press('input[type="password"]', 'Enter', { timeout: 3000 });
+      console.log('    ✅ 已在密码框按 Enter 提交');
     } catch (e) {
-        // Try pressing Enter on the body
-        try {
-            await page.press('body', 'Enter', { timeout: 5000 });
-            submitted = true;
-            console.log('    ✅ 已在 body 按 Enter 提交');
-        } catch (e2) {
-            console.warn('    ⚠️ 按 Enter 提交失败:', e2.message);
-        }
+      console.warn('    ⚠️ 按 Enter 提交失败:', e.message);
     }
 
-    if (!submitted) {
-        // 如果按 Enter 失败，尝试查找并点击登录按钮
-        console.log('    尝试查找登录按钮...');
-        let loginClicked = false;
-        const loginSelectors = [
-          'button:has-text("登录")',
-          'input[type="submit"]',
-          'button[type="submit"]',
-          'button:has-text("Login")',
-          'button:has-text("Sign in")'
-        ];
-        for (const selector of loginSelectors) {
-          try {
-            await Promise.all([
-              page.waitForRequest(req => req.url().includes('/api/user/self') && req.method() === 'GET'),
-              page.click(selector, { timeout: 5000 })
-            ]);
-            loginClicked = true;
-            console.log(`    ✅ 登录按钮已点击 (selector: ${selector})`);
-            break;
-          } catch (e) {
-            // 继续尝试下一个选择器
-          }
+    // 等待登录响应
+    try {
+      await waitForLoginResponse();
+      console.log('    ✅ 检测到登录成功响应 (/api/user/self)');
+      loginSuccess = true;
+    } catch (e) {
+      console.warn('    ⚠️ Enter 提交未触发登录响应:', e.message);
+    }
+
+    // 2. 如果 Enter 未成功，尝试点击登录按钮
+    if (!loginSuccess) {
+      console.log('    尝试查找并点击登录按钮...');
+      let loginClicked = false;
+      const loginSelectors = [
+        'button:has-text("登录")',
+        'input[type="submit"]',
+        'button[type="submit"]',
+        'button:has-text("Login")',
+        'button:has-text("Sign in")'
+      ];
+      for (const selector of loginSelectors) {
+        try {
+          await Promise.all([
+            page.waitForRequest(req => req.url().includes('/api/user/self') && req.method() === 'GET'),
+            page.click(selector, { timeout: 5000 })
+          ]);
+          loginClicked = true;
+          console.log(`    ✅ 登录按钮已点击 (selector: ${selector})`);
+          break;
+        } catch (e) {
+          // 继续尝试下一个选择器
         }
-        if (!loginClicked) {
-          console.error('    ❌ 无法找到登录按钮');
-          await browser.close();
-          process.exit(1);
-        }
+      }
+      if (!loginClicked) {
+        console.error('    ❌ 无法找到登录按钮');
+        await browser.close();
+        process.exit(1);
+      }
+      // 再次等待登录响应
+      try {
+        await waitForLoginResponse();
+        console.log('    ✅ 检测到登录成功响应 (/api/user/self)');
+        loginSuccess = true;
+      } catch (e) {
+        console.error('    ❌ 登录按钮点击后仍未触发登录响应:', e.message);
+        await browser.close();
+        process.exit(1);
+      }
+    }
+
+    if (!loginSuccess) {
+      // This should not happen due to above exits, but just in case
+      console.error('    ❌ 未能完成登录');
+      await browser.close();
+      process.exit(1);
     }
 
     // 4. 等待登录成功（等待 /api/user/self 返回 200）
