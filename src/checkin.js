@@ -167,19 +167,24 @@ if (!USERNAME || !PASSWORD) {
     
     // 2. 填入账号密码
     console.log('[2/5] 填入用户名和密码...');
-    // 使用 placeholder 来定位输入框
+    // 使用精确的 placeholder
     try {
       await page.fill('input[placeholder="用户名或电子邮件"]', USERNAME, { timeout: 5000 });
       console.log('    ✅ 用户名已填入 (placeholder: 用户名或电子邮件)');
     } catch (e) {
       // 备用选择器
       try {
-        await page.fill('input[placeholder*="username"]', USERNAME, { timeout: 5000 });
-        console.log('    ✅ 用户名已填入 (placeholder*="username")');
+        await page.fill('input[placeholder*="用户名"]', USERNAME, { timeout: 5000 });
+        console.log('    ✅ 用户名已填入 (placeholder*="用户名")');
       } catch (e2) {
-        console.error('    ❌ 无法填入用户名');
-        await browser.close();
-        process.exit(1);
+        try {
+          await page.fill('input[name="username"]', USERNAME, { timeout: 5000 });
+          console.log('    ✅ 用户名已填入 (name="username")');
+        } catch (e3) {
+          console.error('    ❌ 无法填入用户名');
+          await browser.close();
+          process.exit(1);
+        }
       }
     }
     
