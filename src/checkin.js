@@ -85,7 +85,7 @@ if (!USERNAME || !PASSWORD) {
       }
 
       if (!newApiUserValue) {
-        console.warn('[WARN] 未在 cookies 中找到 new-api-user，将尝试从响应头/body 中解析');
+        console.warn('[WARN] 未在 cookies 中找到 new-api-user，将尝试从响应头/体中解析');
       }
 
       // --- 第四步：执行签到 ---
@@ -132,7 +132,7 @@ if (!USERNAME || !PASSWORD) {
         console.error(`[FAIL] 签到失败: ${message || checkinText || `HTTP ${checkinResp.status}`}`);
         process.exit(1);
       }
-
+      
       await browser.close();
       return; // 正常退出
     } else {
@@ -164,7 +164,7 @@ if (!USERNAME || !PASSWORD) {
     } catch (e) {
       console.warn('[WARN] 页面加载超时，尝试继续...', e.message);
     }
-
+    
     // 2. 填入账号密码
     console.log('[2/5] 填入用户名和密码...');
     // 尝试多个可能的用户名输入框选择器
@@ -192,6 +192,17 @@ if (!USERNAME || !PASSWORD) {
       process.exit(1);
     }
     
+    // Check the checkbox before submitting
+    console.log('[2.5/5] 检查同意条款...');
+    try {
+      const checkboxSelector = 'input[type="checkbox"]';
+      await page.waitForSelector(checkboxSelector, { state: 'visible', timeout: 5000 });
+      await page.check(checkboxSelector);
+      console.log('    ✅ 已勾选同意条款');
+    } catch (e) {
+      console.warn('    ⚠️ 未找到同意复选框，继续尝试登录');
+    }
+    
     await page.fill('input[type="password"]', PASSWORD);
     console.log('    ✅ 密码已填入');
 
@@ -208,7 +219,7 @@ if (!USERNAME || !PASSWORD) {
         return false;
       }
     };
-
+    
     // 1. 尝试通过 Enter 键提交
     try {
       await page.press('input[type="password"]', 'Enter', { timeout: 3000 });
@@ -233,7 +244,7 @@ if (!USERNAME || !PASSWORD) {
     } catch (e) {
       console.warn('    ⚠️ 按 Enter 提交失败:', e.message);
     }
-
+    
     // 2. 如果 Enter 未成功，尝试点击登录按钮
     if (!loginSuccess) {
       console.log('    尝试查找并点击登录按钮...');
@@ -286,19 +297,19 @@ if (!USERNAME || !PASSWORD) {
         console.log('    ✅ 检测到登录成功响应 (/api/user/self)');
         loginSuccess = true;
       } else {
-        console.error('    ❌ 登录按钮点击后仍未触发登录响应:', e.message);
+        console.error('    ❌ 登录按钮点击后仍未触发登录响应');
         await browser.close();
         process.exit(1);
       }
     }
-
+    
     if (!loginSuccess) {
       // This should not happen due to above exits, but just in case
       console.error('    ❌ 未能完成登录');
       await browser.close();
       process.exit(1);
     }
-
+    
     // 4. 等待登录成功（等待 /api/user/self 返回 200）
     console.log('[4/5] 等待登录验证...');
     try {
@@ -311,7 +322,7 @@ if (!USERNAME || !PASSWORD) {
       await browser.close();
       process.exit(1);
     }
-
+    
     // 5. 保存 storageState 供下次使用
     console.log('[5/5] 保存登录状态，供下次使用...');
     // 确保目录存在
@@ -321,10 +332,10 @@ if (!USERNAME || !PASSWORD) {
     }
     await context.storageState({ path: '.playwright/storageState.json' });
     console.log('    ✅ 状态已保存到 .playwright/storageState.json');
-
+    
     // 获取登录后的 cookies
     cookies = await context.cookies();
-
+    
     // 尝试从 cookies 或响应中提取 new-api-user
     for (const c of cookies) {
       if (c.name === 'new-api-user' || c.name === 'NEW_API_USER') {
@@ -336,7 +347,7 @@ if (!USERNAME || !PASSWORD) {
       // 备用：尝试从 /api/user/self 的响应中解析（此处省略复杂解析，实际可通过 page.content() 获取）
       console.warn('    ⚠️ 未自动探测到 new-api-user，将尝试使用已保存的状态或手动提供');
     }
-
+    
     // --- 第三步：使用新获取的 cookies 进行签到 ---
     console.log('[INFO] 使用新登录会话进行签到...');
     const checkinResp = await fetch(CHECKIN_URL, {
@@ -351,13 +362,13 @@ if (!USERNAME || !PASSWORD) {
       },
       body: JSON.stringify({}),
     });
-
+    
     const checkinText = await checkinResp.text();
     let checkinData;
     try { checkinData = JSON.parse(checkinText); } catch { checkinData = { raw: checkinText }; }
-
+    
     console.log('[INFO] Check-in response:', JSON.stringify(checkinData).slice(0, 200));
-
+    
     // 处理签到结果
     const success = checkinData?.success === true;
     const message = checkinData?.message || '';
@@ -365,7 +376,7 @@ if (!USERNAME || !PASSWORD) {
       (message.includes('今日已签到') ||
        message.includes('已经签到') ||
        message.toLowerCase().includes('already'));
-
+    
     if (checkinResp.ok && success) {
       const quota = checkinData?.data?.quota_awarded;
       const date = checkinData?.data?.checkin_date;
