@@ -167,85 +167,100 @@ if (!USERNAME || !PASSWORD) {
     
     // 2. 填入账号密码
     console.log('[2/5] 填入用户名和密码...');
-    // 尝试多个可能的用户名输入框选择器
-    let usernameFilled = false;
-    const usernameSelectors = [
-      'input[placeholder*="username"]',
-      'input[placeholder*="user"]',
-      'input[name="username"]',
-      'input[type="text"]',
-      'input[type="email"]'
-    ];
-    for (const selector of usernameSelectors) {
+    // 使用 placeholder 来定位输入框
+    try {
+      await page.fill('input[placeholder="用户名或电子邮件"]', USERNAME, { timeout: 5000 });
+      console.log('    ✅ 用户名已填入 (placeholder: 用户名或电子邮件)');
+    } catch (e) {
+      // 备用选择器
       try {
-        await page.fill(selector, USERNAME, { timeout: 5000 });
-        usernameFilled = true;
-        console.log(`    ✅ 用户名已填入 (selector: ${selector})`);
-        break;
-      } catch (e) {
-        // 继续尝试下一个选择器
+        await page.fill('input[placeholder*="username"]', USERNAME, { timeout: 5000 });
+        console.log('    ✅ 用户名已填入 (placeholder*="username")');
+      } catch (e2) {
+        console.error('    ❌ 无法填入用户名');
+        await browser.close();
+        process.exit(1);
       }
     }
-    if (!usernameFilled) {
-      console.error('    ❌ 无法找到用户名输入框');
-      await browser.close();
-      process.exit(1);
-    }
     
-    await page.fill('input[type="password"]', PASSWORD);
-    console.log('    ✅ 密码已填入');
+    try {
+      await page.fill('input[placeholder="密码"]', PASSWORD, { timeout: 5000 });
+      console.log('    ✅ 密码已填入 (placeholder: 密码)');
+    } catch (e) {
+      // 备用选择器
+      try {
+        await page.fill('input[type="password"]', PASSWORD, { timeout: 5000 });
+        console.log('    ✅ 密码已填入 (type="password")');
+      } catch (e2) {
+        console.error('    ❌ 无法填入密码');
+        await browser.close();
+        process.exit(1);
+      }
+    }
 
     // 3. 勾选同意条款
     console.log('[2.5/5] 勾选同意条款...');
     try {
-        // Use the ref from the snapshot: checkbox [ref=e9]
-        await page.check('checkbox[ref="e9"]', { timeout: 5000 });
-        console.log('    ✅ 已勾选同意条款 (使用ref选择器)');
-        
-        // Wait for the login button to become enabled
-        await page.waitForFunction(() => {
-            const btn = document.querySelector('button[ref="e8"]');
-            return btn && !btn.disabled;
-        }, { timeout: 5000 });
-        console.log('    ✅ 登录按钮已启用');
+        // 通过文本精确匹配复选框
+        await page.check('text=我已阅读并同意 用户协议 and the 隐私政策.', { timeout: 5000 });
+        console.log('    ✅ 已勾选同意条款 (文本匹配)');
     } catch (e) {
-        console.warn('    ⚠️ 勾选同意条款或等待登录按钮启用时出错:', e.message);
-        // We'll try to continue and see if we can click the login button anyway
+        try {
+            // 备用：通过label关联的输入框
+            await page.check('label:has-text("我已阅读并同意 用户协议 and the 隐私政策.") >> input[type="checkbox"]', { timeout: 5000 });
+            console.log('    ✅ 已勾选同意条款 (label关联)');
+        } catch (e2) {
+            console.warn('    ⚠️ 勾选同意条款时出错:', e2.message);
+            // 继续尝试，也许按钮已经启用
+        }
     }
     
     // 4. 处理 Cloudflare 验证（如果出现）
     console.log('[2.6/5] 检查 Cloudflare 验证...');
     try {
-        // Check if Cloudflare iframe is present
-        const iframe = await page.waitForSelector('iframe[ref="e14"]', { timeout: 5000 });
+        // 检查是否存在 Cloudflare iframe
+        const iframe = await page.waitForSelector('iframe[title="包含 Cloudflare 安全质询的小组件"]', { timeout: 5000 });
         if (iframe) {
             console.log('    检测到 Cloudflare 验证 iframe');
-            // Wait for the iframe to load
+            // 等待 iframe 加载完成
             await iframe.waitForElementState('stable', { timeout: 5000 });
-            // Get the iframe's frame
+            // 获取 iframe 的 frame
             const frame = iframe.contentFrame();
             if (frame) {
-                // Check the checkbox inside the iframe: "请验证您是真人" [ref=e22]
-                await frame.check('checkbox[ref="e22"]', { timeout: 5000 });
+                // 在 iframe 中勾选 "请验证您是真人" 复选框
+                await frame.check('text=请验证您是真人', { timeout: 5000 });
                 console.log('    ✅ 已勾选 Cloudflare 验证复选框');
-                // Optionally wait a bit for the challenge to complete
+                // 等待验证完成（可选）
                 await page.waitForTimeout(3000);
             }
         }
     } catch (e) {
-        // No Cloudflare iframe found, or already passed
+        // 没有找到 Cloudflare iframe，或者已经通过
         console.log('    未检测到 Cloudflare 验证 iframe，或已通过');
     }
     
-    // 5. 提交表单
+    // 5. 等待登录按钮启用
+    console.log('[2.7/5] 等待登录按钮启用...');
+    try {
+        await page.waitForFunction(() => {
+            const btn = document.querySelector('button:has-text("登录")');
+            return btn && !btn.disabled;
+        }, { timeout: 10000 });
+        console.log('    ✅ 登录按钮已启用');
+    } catch (e) {
+        console.warn('    ⚠️ 等待登录按钮启用超时: ', e.message);
+        // 继续尝试点击
+    }
+    
+    // 6. 提交表单
     console.log('[3/5] 提交表单...');
     let loginSuccess = false;
     try {
-        // Use the ref from the snapshot: button [ref=e8]
-        await page.click('button[ref="e8"]', { timeout: 5000 });
-        console.log('    ✅ 登录按钮已点击 (使用ref选择器)');
+        // 点击登录按钮
+        await page.click('button:has-text("登录")', { timeout: 5000 });
+        console.log('    ✅ 登录按钮已点击');
         
-        // Wait for navigation or response indicating login
+        // 等待导航或响应表明登录成功
         await page.waitForResponse(resp => resp.url().includes('/api/user/self') && resp.status() === 200, { timeout: 10000 });
         console.log('    ✅ 检测到登录成功响应 (/api/user/self)');
         loginSuccess = true;
@@ -256,13 +271,13 @@ if (!USERNAME || !PASSWORD) {
     }
     
     if (!loginSuccess) {
-      // This should not happen due to above exits, but just in case
+      // 此情况不应发生，但以防万一
       console.error('    ❌ 未能完成登录');
       await browser.close();
       process.exit(1);
     }
     
-    // 6. 等待登录成功（等待 /api/user/self 返回 200）
+    // 7. 等待登录成功（等待 /api/user/self 返回 200）
     console.log('[4/5] 等待登录验证...');
     try {
       await page.waitForResponse(async (resp) => {
@@ -275,7 +290,7 @@ if (!USERNAME || !PASSWORD) {
       process.exit(1);
     }
     
-    // 7. 保存 storageState 供下次使用
+    // 8. 保存 storageState 供下次使用
     console.log('[5/5] 保存登录状态，供下次使用...');
     // 确保目录存在
     const fs = await import('fs');
