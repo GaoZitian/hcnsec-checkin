@@ -198,79 +198,37 @@ if (!USERNAME || !PASSWORD) {
     // 3. 勾选同意条款
     console.log('[2.5/5] 勾选同意条款...');
     try {
-      // Use role-based selector for the checkbox
-      const checkbox = page.getByRole('checkbox', { name: /我已阅读并同意 用户协议 and the 隐私政策\.?/ });
-      await checkbox.check({ timeout: 5000 });
-      console.log('    ✅ 已勾选同意条款');
-      
-      // Wait for login button to become enabled
-      await page.waitForFunction(() => {
-        const btn = document.querySelector('button:has-text("登录")');
-        return btn && !btn.disabled;
-      }, { timeout: 5000 });
-      console.log('    ✅ 登录按钮已启用');
+        // Use the ref from the snapshot: checkbox [ref=e9]
+        await page.check('checkbox[ref="e9"]', { timeout: 5000 });
+        console.log('    ✅ 已勾选同意条款 (使用ref选择器)');
+        
+        // Wait for the login button to become enabled
+        await page.waitForFunction(() => {
+            const btn = document.querySelector('button[ref="e8"]');
+            return btn && !btn.disabled;
+        }, { timeout: 5000 });
+        console.log('    ✅ 登录按钮已启用');
     } catch (e) {
-      console.warn('    ⚠️ 勾选同意条款时出错:', e.message);
-      // Continue anyway; maybe button already enabled
+        console.warn('    ⚠️ 勾选同意条款或等待登录按钮启用时出错:', e.message);
+        // We'll try to continue and see if we can click the login button anyway
     }
     
     // 4. 提交表单
     console.log('[3/5] 提交表单...');
     let loginSuccess = false;
-    
-    // Function to check if we're logged in by trying to access /api/user/self
-    const checkLoginStatus = async () => {
-      try {
-        const resp = await page.goto(SELF_URL, { waitUntil: 'networkidle', timeout: 10000 });
-        return resp && resp.status() === 200;
-      } catch (e) {
-        return false;
-      }
-    };
-    
-    // 1. 尝试通过 Enter 键提交
     try {
-      await page.press('input[type="password"]', 'Enter', { timeout: 3000 });
-      console.log('    ✅ 已在密码框按 Enter 提交');
-      
-      // Wait a bit for potential redirect or API call
-      await page.waitForTimeout(2000);
-      
-      // Check if login was successful
-      if (await checkLoginStatus()) {
-        console.log('    ✅ 检测到登录成功响应 (/api/user/self)');
-        loginSuccess = true;
-      } else {
-        console.warn('    ⚠️ Enter 提交未立即触发登录响应，等待中...');
-        // Wait a bit more and check again
-        await page.waitForTimeout(3000);
-        if (await checkLoginStatus()) {
-          console.log('    ✅ 检测到登录成功响应 (/api/user/self)');
-          loginSuccess = true;
-        }
-      }
-    } catch (e) {
-      console.warn('    ⚠️ 按 Enter 提交失败:', e.message);
-    }
-    
-    // 2. 如果 Enter 未成功，尝试点击登录按钮
-    if (!loginSuccess) {
-      console.log('    尝试查找并点击登录按钮...');
-      try {
-        // Wait for login button to be visible and enabled
-        await page.waitForSelector('button:has-text("登录"):not([disabled])', { timeout: 5000 });
-        await page.click('button:has-text("登录")', { timeout: 5000 });
-        console.log('    ✅ 登录按钮已点击');
+        // Use the ref from the snapshot: button [ref=e8]
+        await page.click('button[ref="e8"]', { timeout: 5000 });
+        console.log('    ✅ 登录按钮已点击 (使用ref选择器)');
         
         // Wait for navigation or response indicating login
         await page.waitForResponse(resp => resp.url().includes('/api/user/self') && resp.status() === 200, { timeout: 10000 });
         console.log('    ✅ 检测到登录成功响应 (/api/user/self)');
         loginSuccess = true;
-      } catch (e) {
+    } catch (e) {
         console.error('    ❌ 无法找到或点击登录按钮:', e.message);
         await browser.close();
         process.exit(1);
-      }
     }
     
     if (!loginSuccess) {
