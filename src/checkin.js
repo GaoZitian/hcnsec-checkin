@@ -194,13 +194,36 @@ if (!USERNAME || !PASSWORD) {
     
     // Check the checkbox before submitting
     console.log('[2.5/5] 检查同意条款...');
+    let checkboxChecked = false;
     try {
-      const checkboxSelector = 'input[type="checkbox"]';
-      await page.waitForSelector(checkboxSelector, { state: 'visible', timeout: 5000 });
-      await page.check(checkboxSelector);
-      console.log('    ✅ 已勾选同意条款');
+      // Try multiple selectors for the checkbox
+      const checkboxSelectors = [
+        'input[type="checkbox"]',
+        'text=我已阅读并同意 用户协议 and the 隐私政策',
+        'text=/我已阅读并同意/',
+        '//label[contains(.,"用户协议")]/input[@type="checkbox"]',
+        '//label[contains(.,"隐私政策")]/input[@type="checkbox"]'
+      ];
+      
+      for (const selector of checkboxSelectors) {
+        try {
+          console.log(`    尝试选择器: ${selector}`);
+          await page.waitForSelector(selector, { state: 'attached', timeout: 3000 });
+          await page.check(selector);
+          console.log('    ✅ 已勾选同意条款');
+          checkboxChecked = true;
+          break;
+        } catch (e) {
+          console.log(`    ⚠️ 选择器失败: ${selector}`);
+          // Continue to next selector
+        }
+      }
+      
+      if (!checkboxChecked) {
+        console.warn('    ⚠️ 未找到同意复选框，继续尝试登录');
+      }
     } catch (e) {
-      console.warn('    ⚠️ 未找到同意复选框，继续尝试登录');
+      console.warn('    ⚠️ 检查同意条款时出错:', e.message);
     }
     
     await page.fill('input[type="password"]', PASSWORD);
@@ -270,7 +293,7 @@ if (!USERNAME || !PASSWORD) {
       
       for (const selector of loginSelectors) {
         try {
-          // Wait for the button to be visible and enabled
+          // Wait for the button to be visible
           await page.waitForSelector(selector, { state: 'visible', timeout: 3000 });
           // Click and wait for navigation or response
           await Promise.all([
