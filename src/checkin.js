@@ -1,6 +1,6 @@
 /**
  * HCNSec 每日签到脚本
- * 功能：
+ * 功能 بينما:
  *   1. 优先使用已保存的 Playwright storageState（Cookie + localStorage）
  *   2. 如果没有保存的状态，使用 GitHub Secrets 里的账号密码自动登录
  *   3. 登录成功后保存 storageState，供下次使用
@@ -192,46 +192,65 @@ if (!USERNAME || !PASSWORD) {
       process.exit(1);
     }
     
-    // Check the checkbox before submitting
+    // Check the checkbox before submitting - SIMPLIFIED APPROACH
     console.log('[2.5/5] 检查同意条款...');
     let checkboxChecked = false;
     try {
-      // Based on the HTML snapshot, try these selectors in order
+      // Based on the HTML, the checkbox is a direct sibling of the text
+      // Try the most direct approach first: find by the exact text content
       const checkboxSelectors = [
-        // Direct ref if we could know it (but we can't)
-        // Try clicking the label by exact text match
+        // Try to find the label by exact text and click it
         'label:has-text("我已阅读并同意 用户协议 and the 隐私政策.")',
         'label:has-text("我已阅读并同意 用户协议 and the 隐私政策")',
-        // Try the text node directly
-        'text=我已阅读并同意 用户协议 and the 隐私政策.',
-        'text=我已阅读并同意 用户协议 and the 隐私政策',
-        // Try XPath with exact text
-        '//label[normalize-space()="我已阅读并同意 用户协议 and the 隐私政策."]',
-        '//label[normalize-space()="我已阅读并同意 用户协议 and the 隐私政策"]',
-        // Try finding by input[type=checkbox] near the text
-        '//input[@type="checkbox"][preceding-sibling::text()[contains(.,"我已阅读并同意")]]',
-        '//input[@type="checkbox"][following-sibling::text()[contains(.,"用户协议")]]',
-        // Fallback to any checkbox
+        // Try to find the checkbox directly by its associated text via XPath
+        '//label[text()="我已阅读并同意 用户协议 and the 隐私政策."]/preceding-sibling::input[@type="checkbox"]',
+        '//label[text()="我已阅读并同意 用户协议 and the 隐私政策."]/following-sibling::input[@type="checkbox"]',
+        '//label[contains(text(),"我已阅读并同意 用户协议")]/preceding-sibling::input[@type="checkbox"]',
+        '//label[contains(text(),"我已阅读并同意 用户协议")]/following-sibling::input[@type="checkbox"]',
+        // Try to find by placeholder-like attributes
+        'input[type="checkbox"][aria-label*="同意"]',
+        'input[type="checkbox"][aria-label*="同意条款"]',
+        // Fallback to any checkbox and then verify by checking nearby text
         'input[type="checkbox"]'
       ];
       
       for (const selector of checkboxSelectors) {
         try {
-          console.log(`    尝试选择器: ${selector}`);
+          console.log(`    尝试选择器: ${selector.substring(0, 60)}...`);
           await page.waitForSelector(selector, { state: 'attached', timeout: 3000 });
-          // For label selectors, we need to click the label which will check the checkbox
-          // For input selectors, we check directly
-          if (selector.startsWith('//label') || selector.startsWith('label:') || selector.startsWith('text=')) {
+          
+          if (selector.startsWith('//') || selector.startsWith('label:')) {
+            // For XPath or label selectors, click the label
             await page.click(selector, { timeout: 3000 });
           } else {
+            // For direct input selectors, check the checkbox
             await page.check(selector, { timeout: 3000 });
           }
-          console.log('    ✅ 已勾选同意条款');
-          checkboxChecked = true;
-          break;
+          
+          // Verify it's checked
+          const isChecked = await page.isChecked(selector.startsWith('//') || selector.startsWith('label:') 
+            ? selector.replace(/^label:/, '').replace(/^\/label\[/, '//label[') 
+            : selector);
+          if (isChecked) {
+            console.log('    ✅ 已勾选同意条款');
+            checkboxChecked = true;
+            break;
+          }
         } catch (e) {
-          console.log(`    ⚠️ 选择器失败: ${selector.substring(0, 50)}...`);
+          console.log(`    ⚠️ 选择器失败: ${selector.substring(0, 40)}...`);
           // Continue to next selector
+        }
+      }
+      
+      // Final fallback: try to click the text directly
+      if (!checkboxChecked) {
+        try {
+          console.log('    尝试直接点击文本...');
+          await page.click('text=我已阅读并同意 用户协议 and the 隐私政策.', { timeout: 3000 });
+          checkboxChecked = true;
+          console.log('    ✅ 已通过文本点击勾选同意条款');
+        } catch (e) {
+          console.log('    ⚠️ 直接点击文本失败');
         }
       }
       
