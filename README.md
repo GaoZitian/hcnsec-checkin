@@ -1,6 +1,6 @@
 # hcnsec daily check-in
 
-GitHub Actions 工作流，用于自动签到 **https://api.hcnsec.cn/**（NewAPI 标准站点）。
+GitHub Actions 工作流，用于自动签到 **[https://api.hcnsec.cn/】**（[NewAPI](https://api.hcnsec.cn/) 标准站点）。
 
 ## ✨ 功能
 

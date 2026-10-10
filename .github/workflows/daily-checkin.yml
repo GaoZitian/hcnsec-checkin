@@ -1,4 +1,4 @@
-name: HCNSec Daily Check-in
+name: hcnsec daily check-in
 
 on:
   schedule:
