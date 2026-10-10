@@ -28,7 +28,7 @@ jobs:
           node-version: '20'
 
       # ---------------------------------------------------------
-      # 2. 安装项目依赖
+      # 3. 安装项目依赖
       # ---------------------------------------------------------
       - name: Install dependencies
         run: npm ci
@@ -36,13 +36,15 @@ jobs:
         # 之后缓存将复用，速度极快。
 
       # ---------------------------------------------------------
-      # 3. 安装 Playwright 浏览器二进制
+      # 4. 运行 playwright 安装并运行脚本
       # ---------------------------------------------------------
-      - name: Install Playwright browsers
-        uses: playwright/setup-playwright-action@v2
+      - name: Install dependencies and browsers
+        run: |
+          npm ci
+          npx playwright install --with-deps
 
       # ---------------------------------------------------------
-      # 4. 运行签到脚本
+      # 5. 运行签到脚本
       # ---------------------------------------------------------
-      - name: Run HCNSec check-in
+      - name: Run hcnsec check-in
         run: node checkin.js
