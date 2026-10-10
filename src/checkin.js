@@ -196,34 +196,65 @@ if (!USERNAME || !PASSWORD) {
     console.log('[2.5/5] 检查同意条款...');
     let checkboxChecked = false;
     try {
-      // Try multiple selectors for the checkbox
+      // Based on the HTML snapshot, try these selectors in order
       const checkboxSelectors = [
-        'input[type="checkbox"]',
+        // Direct ref if we could know it (but we can't)
+        // Try clicking the label by exact text match
+        'label:has-text("我已阅读并同意 用户协议 and the 隐私政策.")',
+        'label:has-text("我已阅读并同意 用户协议 and the 隐私政策")',
+        // Try the text node directly
+        'text=我已阅读并同意 用户协议 and the 隐私政策.',
         'text=我已阅读并同意 用户协议 and the 隐私政策',
-        'text=/我已阅读并同意/',
-        '//label[contains(.,"用户协议")]/input[@type="checkbox"]',
-        '//label[contains(.,"隐私政策")]/input[@type="checkbox"]'
+        // Try XPath with exact text
+        '//label[normalize-space()="我已阅读并同意 用户协议 and the 隐私政策."]',
+        '//label[normalize-space()="我已阅读并同意 用户协议 and the 隐私政策"]',
+        // Try finding by input[type=checkbox] near the text
+        '//input[@type="checkbox"][preceding-sibling::text()[contains(.,"我已阅读并同意")]]',
+        '//input[@type="checkbox"][following-sibling::text()[contains(.,"用户协议")]]',
+        // Fallback to any checkbox
+        'input[type="checkbox"]'
       ];
       
       for (const selector of checkboxSelectors) {
         try {
           console.log(`    尝试选择器: ${selector}`);
           await page.waitForSelector(selector, { state: 'attached', timeout: 3000 });
-          await page.check(selector);
+          // For label selectors, we need to click the label which will check the checkbox
+          // For input selectors, we check directly
+          if (selector.startsWith('//label') || selector.startsWith('label:') || selector.startsWith('text=')) {
+            await page.click(selector, { timeout: 3000 });
+          } else {
+            await page.check(selector, { timeout: 3000 });
+          }
           console.log('    ✅ 已勾选同意条款');
           checkboxChecked = true;
           break;
         } catch (e) {
-          console.log(`    ⚠️ 选择器失败: ${selector}`);
+          console.log(`    ⚠️ 选择器失败: ${selector.substring(0, 50)}...`);
           // Continue to next selector
         }
       }
       
-      if (!checkboxChecked) {
-        console.warn('    ⚠️ 未找到同意复选框，继续尝试登录');
+      // Additional wait to see if button gets enabled
+      if (checkboxChecked) {
+        await page.waitForTimeout(1000);
+        // Check if login button is now enabled
+        const loginButton = await page.$('button:has-text("登录")');
+        if (loginButton) {
+          const isDisabled = await loginButton.evaluate(el => el.disabled);
+          if (!isDisabled) {
+            console.log('    ✅ 登录按钮已启用');
+          } else {
+            console.log('    ⚠️ 登录按钮仍然禁用，但将继续尝试');
+          }
+        }
       }
     } catch (e) {
       console.warn('    ⚠️ 检查同意条款时出错:', e.message);
+    }
+    
+    if (!checkboxChecked) {
+      console.warn('    ⚠️ 未能勾选同意复选框，将尝试继续登录（按钮可能仍然禁用）');
     }
     
     await page.fill('input[type="password"]', PASSWORD);
