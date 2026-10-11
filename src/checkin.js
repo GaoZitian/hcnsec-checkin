@@ -12,6 +12,10 @@
  * 输出：
  *   - 签到成功 / 已签到 / 失败，并返回相应 exit code
  */
+import fetch from 'node-fetch';
+import { chromium } from 'playwright';
+import * as dotenv from 'dotenv';
+
 /* 加载 .env（GitHub Actions 中会自动将 secrets 注入为环境变量） */
 dotenv.config();
 
