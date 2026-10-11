@@ -167,34 +167,57 @@ if (!USERNAME || !PASSWORD) {
     
     // 2. 填入账号密码
     console.log('[2/5] 填入用户名和密码...');
-    // 使用精确的 ref 选择器
+    // 等待用户名输入框出现
     try {
+      await page.waitForSelector('textbox[ref="e6"]', { timeout: 5000 });
       await page.fill('textbox[ref="e6"]', USERNAME, { timeout: 5000 });
       console.log('    ✅ 用户名已填入 (ref=e6)');
     } catch (e) {
       // 备用选择器
       try {
+        await page.waitForSelector('input[placeholder="用户名或电子邮件"]', { timeout: 5000 });
         await page.fill('input[placeholder="用户名或电子邮件"]', USERNAME, { timeout: 5000 });
         console.log('    ✅ 用户名已填入 (placeholder: 用户名或电子邮件)');
       } catch (e2) {
-        console.error('    ❌ 无法填入用户名');
-        await browser.close();
-        process.exit(1);
+        try {
+          await page.waitForSelector('input[placeholder*="用户名"]', { timeout: 5000 });
+          await page.fill('input[placeholder*="用户名"]', USERNAME, { timeout: 5000 });
+          console.log('    ✅ 用户名已填入 (placeholder*="用户名")');
+        } catch (e3) {
+          try {
+            await page.waitForSelector('input[name="username"]', { timeout: 5000 });
+            await page.fill('input[name="username"]', USERNAME, { timeout: 5000 });
+            console.log('    ✅ 用户名已填入 (name="username")');
+          } catch (e4) {
+            console.error('    ❌ 无法填入用户名');
+            await browser.close();
+            process.exit(1);
+          }
+        }
       }
     }
     
+    // 密码
     try {
+      await page.waitForSelector('textbox[ref="e15"]', { timeout: 5000 });
       await page.fill('textbox[ref="e15"]', PASSWORD, { timeout: 5000 });
       console.log('    ✅ 密码已填入 (ref=e15)');
     } catch (e) {
       // 备用选择器
       try {
+        await page.waitForSelector('input[placeholder="密码"]', { timeout: 5000 });
         await page.fill('input[placeholder="密码"]', PASSWORD, { timeout: 5000 });
         console.log('    ✅ 密码已填入 (placeholder: 密码)');
       } catch (e2) {
-        console.error('    ❌ 无法填入密码');
-        await browser.close();
-        process.exit(1);
+        try {
+          await page.waitForSelector('input[type="password"]', { timeout: 5000 });
+          await page.fill('input[type="password"]', PASSWORD, { timeout: 5000 });
+          console.log('    ✅ 密码已填入 (type="password")');
+        } catch (e3) {
+          console.error('    ❌ 无法填入密码');
+          await browser.close();
+          process.exit(1);
+        }
       }
     }
 
