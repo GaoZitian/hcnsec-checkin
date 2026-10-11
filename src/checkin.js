@@ -167,57 +167,34 @@ if (!USERNAME || !PASSWORD) {
     
     // 2. 填入账号密码
     console.log('[2/5] 填入用户名和密码...');
-    // 等待用户名输入框出现
+    // 使用精确的 ref 选择器（基于实际DOM结构）
     try {
-      await page.waitForSelector('textbox[ref="e6"]', { timeout: 5000 });
-      await page.fill('textbox[ref="e6"]', USERNAME, { timeout: 5000 });
-      console.log('    ✅ 用户名已填入 (ref=e6)');
+      await page.fill('textbox[ref="e7"]', USERNAME, { timeout: 5000 });
+      console.log('    ✅ 用户名已填入 (ref=e7)');
     } catch (e) {
       // 备用选择器
       try {
-        await page.waitForSelector('input[placeholder="用户名或电子邮件"]', { timeout: 5000 });
         await page.fill('input[placeholder="用户名或电子邮件"]', USERNAME, { timeout: 5000 });
         console.log('    ✅ 用户名已填入 (placeholder: 用户名或电子邮件)');
       } catch (e2) {
-        try {
-          await page.waitForSelector('input[placeholder*="用户名"]', { timeout: 5000 });
-          await page.fill('input[placeholder*="用户名"]', USERNAME, { timeout: 5000 });
-          console.log('    ✅ 用户名已填入 (placeholder*="用户名")');
-        } catch (e3) {
-          try {
-            await page.waitForSelector('input[name="username"]', { timeout: 5000 });
-            await page.fill('input[name="username"]', USERNAME, { timeout: 5000 });
-            console.log('    ✅ 用户名已填入 (name="username")');
-          } catch (e4) {
-            console.error('    ❌ 无法填入用户名');
-            await browser.close();
-            process.exit(1);
-          }
-        }
+        console.error('    ❌ 无法填入用户名');
+        await browser.close();
+        process.exit(1);
       }
     }
     
-    // 密码
     try {
-      await page.waitForSelector('textbox[ref="e15"]', { timeout: 5000 });
-      await page.fill('textbox[ref="e15"]', PASSWORD, { timeout: 5000 });
-      console.log('    ✅ 密码已填入 (ref=e15)');
+      await page.fill('textbox[ref="e16"]', PASSWORD, { timeout: 5000 });
+      console.log('    ✅ 密码已填入 (ref=e16)');
     } catch (e) {
       // 备用选择器
       try {
-        await page.waitForSelector('input[placeholder="密码"]', { timeout: 5000 });
         await page.fill('input[placeholder="密码"]', PASSWORD, { timeout: 5000 });
         console.log('    ✅ 密码已填入 (placeholder: 密码)');
       } catch (e2) {
-        try {
-          await page.waitForSelector('input[type="password"]', { timeout: 5000 });
-          await page.fill('input[type="password"]', PASSWORD, { timeout: 5000 });
-          console.log('    ✅ 密码已填入 (type="password")');
-        } catch (e3) {
-          console.error('    ❌ 无法填入密码');
-          await browser.close();
-          process.exit(1);
-        }
+        console.error('    ❌ 无法填入密码');
+        await browser.close();
+        process.exit(1);
       }
     }
 
@@ -225,8 +202,8 @@ if (!USERNAME || !PASSWORD) {
     console.log('[2.5/5] 勾选同意条款...');
     try {
       // 通过 ref 选择器（最可靠）
-      await page.check('checkbox[ref="e8"]', { timeout: 5000 });
-      console.log('    ✅ 已勾选同意条款 (ref=e8)');
+      await page.check('checkbox[ref="e9"]', { timeout: 5000 });
+      console.log('    ✅ 已勾选同意条款 (ref=e9)');
     } catch (e) {
       try {
         // 备用：通过 label 文本关联
@@ -265,12 +242,12 @@ if (!USERNAME || !PASSWORD) {
     // 5. 等待登录按钮启用
     console.log('[2.7/5] 等待登录按钮启用...');
     try {
-      // 等待按钮 ref=e7 且不禁用
+      // 等待按钮 ref=e8 且不禁用
       await page.waitForFunction(() => {
-        const btn = document.querySelector('button[ref="e7"]');
+        const btn = document.querySelector('button[ref="e8"]');
         return btn && !btn.disabled;
-      }, { timeout: 10000 });
-      console.log('    ✅ 登录按钮已启用 (ref=e7)');
+      }, { timeout: 60000 }); // 增加超时时间
+      console.log('    ✅ 登录按钮已启用 (ref=e8)');
     } catch (e) {
       console.warn('    ⚠️ 等待登录按钮启用超时: ', e.message);
       // 继续尝试点击
@@ -281,8 +258,8 @@ if (!USERNAME || !PASSWORD) {
     let loginSuccess = false;
     try {
       // 点击登录按钮
-      await page.click('button[ref="e7"]', { timeout: 5000 });
-      console.log('    ✅ 登录按钮已点击 (ref=e7)');
+      await page.click('button[ref="e8"]', { timeout: 5000 });
+      console.log('    ✅ 登录按钮已点击 (ref=e8)');
       
       // 等待导航或响应表明登录成功
       await page.waitForResponse(resp => resp.url().includes('/api/user/self') && resp.status() === 200, { timeout: 10000 });
