@@ -1,6 +1,6 @@
 /**
  * HCNSec 每日签到脚本
- * 功能 mientras:
+ * 功能:
  *   1. 优先使用已保存的 Playwright storageState（Cookie + localStorage）
  *   2. 如果没有保存的状态，使用 GitHub Secrets 里的账号密码自动登录
  *   3. 登录成功后保存 storageState，供下次使用
@@ -52,10 +52,8 @@ if (!USERNAME || !PASSWORD) {
   let newApiUserValue = null;
 
   try {
-    // Playwright 会自动查找 ./.playwright/storageState.json（相对于运行工作目录）
-    // 如果存在，chromium launch 时会自动注入 Cookie + Storage
-    console.log('[INFO] 尝试恢存已保存的登录态...');
-    
+    console.log('[INFO] 尝试恢复已保存的登录态...');
+
     // 启动浏览器并携带 storageState
     const browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({
@@ -66,16 +64,11 @@ if (!USERNAME || !PASSWORD) {
     // 直接访问受保护的 API（无需再次登录）
     const resp = await page.goto(SELF_URL, { waitUntil: 'networkidle' });
     if (resp && resp.status() === 200) {
-      const data = await page.evaluate(() => {
-        // 在页面上下文中获取 JSON（实际可能需要通过 API 响应捕获）
-        // 这里简化处理：直接尝试 fetch 一次验化
-        return 'session_valid';
-      });
       console.log('[INFO] 已成功恢复登录态（storageState 有效）');
 
       // 获取当前的 cookies
       cookies = await context.cookies();
-      
+
       // 从 cookies 里找 new-api-user
       for (const c of cookies) {
         if (c.name === 'new-api-user' || c.name === 'NEW_API_USER') {
@@ -132,7 +125,7 @@ if (!USERNAME || !PASSWORD) {
         console.error(`[FAIL] 签到失败: ${message || checkinText || `HTTP ${checkinResp.status}`}`);
         process.exit(1);
       }
-      
+
       await browser.close();
       return; // 正常退出
     } else {
@@ -164,192 +157,243 @@ if (!USERNAME || !PASSWORD) {
     } catch (e) {
       console.warn('[WARN] 页面加载超时，尝试继续...', e.message);
     }
-    
-    // 等待页面完全加载并检查是否在登录页
-    try {
-      await page.waitForFunction(() => {
-        return document.querySelector('textbox[ref="e7"]') !== null;
-      }, { timeout: 10000 });
-      console.log('    ✅ 登录表单已加载');
-    } catch (e) {
-      console.warn('    ⚠️ 等待登录表单超时，但继续尝试填充');
-    }
-    
-    // 2. 填入账号密码
+
+    // 等待页面稳定（给 JS 渲染时间）
+    await page.waitForTimeout(3000);
+
+    // 2. 填入账号密码 - 使用通用、稳定的选择器（不依赖 ref）
     console.log('[2/5] 填入用户名和密码...');
-    // 使用精确的 ref 选择器（基于实际DOM结构）
-    try {
-      // 等待用户名输入框出现
-      await page.waitForSelector('textbox[ref="e7"]', { timeout: 10000 });
-      await page.fill('textbox[ref="e7"]', USERNAME, { timeout: 5000 });
-      console.log('    ✅ 用户名已填入 (ref=e7)');
-    } catch (e) {
-      // 备用选择器
+
+    // 用户名：优先 placeholder，其次 name，最后 type
+    let usernameFilled = false;
+    const usernameSelectors = [
+      'input[placeholder="用户名或电子邮件"]',
+      'input[placeholder*="用户名"]',
+      'input[name="username"]',
+      'input[type="text"]:not([type="hidden"])',
+      'input:not([type="password"]):not([type="hidden"]):not([type="submit"]):not([type="button"])',
+    ];
+
+    for (const selector of usernameSelectors) {
       try {
-        await page.waitForSelector('input[placeholder="用户名或电子邮件"]', { timeout: 10000 });
-        await page.fill('input[placeholder="用户名或电子邮件"]', USERNAME, { timeout: 5000 });
-        console.log('    ✅ 用户名已填入 (placeholder: 用户名或电子邮件)');
+        await page.waitForSelector(selector, { state: 'visible', timeout: 8000 });
+        await page.fill(selector, USERNAME, { timeout: 5000 });
+        console.log(`    ✅ 用户名已填入 (${selector})`);
+        usernameFilled = true;
+        break;
+      } catch (e) {
+        // 尝试下一个选择器
+      }
+    }
+
+    if (!usernameFilled) {
+      console.error('    ❌ 无法填入用户名：所有选择器均失败');
+      await browser.close();
+      process.exit(1);
+    }
+
+    // 密码：优先 placeholder，其次 type=password
+    let passwordFilled = false;
+    const passwordSelectors = [
+      'input[placeholder="密码"]',
+      'input[type="password"]',
+      'input[name="password"]',
+    ];
+
+    for (const selector of passwordSelectors) {
+      try {
+        await page.waitForSelector(selector, { state: 'visible', timeout: 8000 });
+        await page.fill(selector, PASSWORD, { timeout: 5000 });
+        console.log(`    ✅ 密码已填入 (${selector})`);
+        passwordFilled = true;
+        break;
+      } catch (e) {
+        // 尝试下一个选择器
+      }
+    }
+
+    if (!passwordFilled) {
+      console.error('    ❌ 无法填入密码：所有选择器均失败');
+      await browser.close();
+      process.exit(1);
+    }
+
+    // 3. 勾选同意条款 - 使用多层级备选选择器
+    console.log('[2.5/5] 勾选同意条款...');
+    let checkboxChecked = false;
+
+    // 方案 1：role 选择器（最语义化、最稳定）
+    try {
+      const checkbox = page.getByRole('checkbox', { name: /我已阅读并同意/ });
+      await checkbox.waitFor({ state: 'visible', timeout: 15000 });
+      await checkbox.check({ force: true });
+      console.log('    ✅ 已勾选同意条款 (role: checkbox + name)');
+      checkboxChecked = true;
+    } catch (e) {
+      // 方案 2：label 文本关联的 checkbox
+      try {
+        const checkbox = page.locator('label:has-text("我已阅读并同意") >> input[type="checkbox"]');
+        await checkbox.waitFor({ state: 'visible', timeout: 10000 });
+        await checkbox.check({ force: true });
+        console.log('    ✅ 已勾选同意条款 (label 关联)');
+        checkboxChecked = true;
       } catch (e2) {
+        // 方案 3：页面上唯一的 checkbox（通常就是同意条款）
         try {
-          await page.waitForSelector('input[placeholder*="用户名"]', { timeout: 10000 });
-          await page.fill('input[placeholder*="用户名"]', USERNAME, { timeout: 5000 });
-          console.log('    ✅ 用户名已填入 (placeholder*="用户名")');
+          const checkbox = page.locator('input[type="checkbox"]').first();
+          await checkbox.waitFor({ state: 'visible', timeout: 10000 });
+          await checkbox.check({ force: true });
+          console.log('    ✅ 已勾选同意条款 (首个 checkbox)');
+          checkboxChecked = true;
         } catch (e3) {
+          // 方案 4：通过 evaluate 直接操作 DOM（最后手段）
           try {
-            await page.waitForSelector('input[name="username"]', { timeout: 10000 });
-            await page.fill('input[name="username"]', USERNAME, { timeout: 5000 });
-            console.log('    ✅ 用户名已填入 (name="username")');
+            await page.evaluate(() => {
+              const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+              for (const cb of checkboxes) {
+                if (!cb.checked) {
+                  cb.click();
+                  return true;
+                }
+              }
+              return false;
+            });
+            console.log('    ✅ 已勾选同意条款 (evaluate 强制点击)');
+            checkboxChecked = true;
           } catch (e4) {
-            console.error('    ❌ 无法填入用户名');
-            await browser.close();
-            process.exit(1);
+            console.warn('    ⚠️ 勾选同意条款失败，继续尝试登录:', e4.message);
           }
         }
       }
     }
-    
+
+    // 给勾选后的 UI 状态更新一点时间
+    await page.waitForTimeout(1000);
+
+    // 4. 处理 Cloudflare 验证（如果出现）
+    console.log('[2.6/5] 检查 Cloudflare 验证...');
     try {
-      // 等待密码输入框出现
-      await page.waitForSelector('textbox[ref="e16"]', { timeout: 10000 });
-      await page.fill('textbox[ref="e16"]', PASSWORD, { timeout: 5000 });
-      console.log('    ✅ 密码已填入 (ref=e16)');
+      // 检查是否存在 Cloudflare iframe（常见 title）
+      const cfIframe = page.frameLocator('iframe[title*="Cloudflare"], iframe[title*="challenge"], iframe[title*="验证"]');
+      await cfIframe.locator('input[type="checkbox"], button:has-text("验证"), button:has-text("Verify")').first().waitFor({ state: 'visible', timeout: 5000 });
+      console.log('    检测到 Cloudflare 验证，尝试处理...');
+
+      // 尝试在 iframe 中点击验证按钮/复选框
+      await cfIframe.locator('input[type="checkbox"]').first().check({ force: true, timeout: 5000 }).catch(() => {});
+      await cfIframe.locator('button:has-text("验证"), button:has-text("Verify"), button:has-text("我是人类")').first().click({ force: true, timeout: 5000 }).catch(() => {});
+
+      // 等待验证完成
+      await page.waitForTimeout(5000);
+      console.log('    ✅ Cloudflare 验证处理尝试完成');
     } catch (e) {
-      // 备用选择器
+      console.log('    未检测到 Cloudflare 验证，或已通过');
+    }
+
+    // 5. 提交表单 - 查找并点击登录按钮
+    console.log('[2.7/5] 查找并点击登录按钮...');
+    let loginClicked = false;
+
+    const loginButtonSelectors = [
+      'button[type="submit"]',
+      'button:has-text("登录")',
+      'button:has-text("登 录")',
+      'button:has-text("登  录")',
+      'button:has-text("Sign in")',
+      'button:has-text("Sign In")',
+      'input[type="submit"]',
+      'button:not([disabled]):visible',
+      'button', // 最后兜底：页面上第一个可见的 button
+    ];
+
+    for (const selector of loginButtonSelectors) {
       try {
-        await page.waitForSelector('input[placeholder="密码"]', { timeout: 10000 });
-        await page.fill('input[placeholder="密码"]', PASSWORD, { timeout: 5000 });
-        console.log('    ✅ 密码已填入 (placeholder: 密码)');
+        const btn = page.locator(selector).first();
+        await btn.waitFor({ state: 'visible', timeout: 8000 });
+
+        // 检查是否禁用
+        const isDisabled = await btn.isDisabled();
+        if (isDisabled) {
+          console.log(`    ⏳ 按钮 ${selector} 当前禁用，等待启用...`);
+          await page.waitForFunction((sel) => {
+            const el = document.querySelector(sel);
+            return el && !el.disabled;
+          }, selector, { timeout: 30000 });
+        }
+
+        await btn.click({ force: true, timeout: 5000 });
+        console.log(`    ✅ 登录按钮已点击 (${selector})`);
+        loginClicked = true;
+        break;
+      } catch (e) {
+        // 尝试下一个选择器
+      }
+    }
+
+    if (!loginClicked) {
+      // 最后尝试：按 Enter 键提交表单
+      try {
+        await page.keyboard.press('Enter');
+        console.log('    ✅ 已按 Enter 键提交表单');
+        loginClicked = true;
+      } catch (e) {
+        console.error('    ❌ 无法找到或点击登录按钮，且 Enter 提交失败');
+        await browser.close();
+        process.exit(1);
+      }
+    }
+
+    // 6. 等待登录成功（等待 /api/user/self 返回 200 或页面跳转）
+    console.log('[3/5] 等待登录验证...');
+    let loginSuccess = false;
+
+    try {
+      // 方式 1：监听 /api/user/self 请求成功
+      await page.waitForResponse(async (resp) => {
+        return resp.url().includes('/api/user/self') && resp.status() === 200;
+      }, { timeout: 15000 });
+      console.log('    ✅ 登录成功（/api/user/self 返回 200）');
+      loginSuccess = true;
+    } catch (e) {
+      // 方式 2：检查是否跳转离开登录页
+      try {
+        await page.waitForURL((url) => !url.toString().includes('/login'), { timeout: 10000 });
+        console.log('    ✅ 登录成功（页面已跳转离开登录页）');
+        loginSuccess = true;
       } catch (e2) {
+        // 方式 3：直接请求 /api/user/self 验证
         try {
-          await page.waitForSelector('input[type="password"]', { timeout: 10000 });
-          await page.fill('input[type="password"]', PASSWORD, { timeout: 5000 });
-          console.log('    ✅ 密码已填入 (type="password")');
+          const testResp = await page.goto(SELF_URL, { waitUntil: 'networkidle', timeout: 10000 });
+          if (testResp && testResp.status() === 200) {
+            console.log('    ✅ 登录成功（直接访问 /api/user/self 返回 200）');
+            loginSuccess = true;
+          }
         } catch (e3) {
-          console.error('    ❌ 无法填入密码');
+          console.error('    ❌ 登录失败，可能验证码挑战或账号密码错误');
           await browser.close();
           process.exit(1);
         }
       }
     }
 
-    // 3. 勾选同意条款
-    console.log('[2.5/5] 勾选同意条款...');
-    try {
-      // 使用角色选择器（最可靠）
-      const agreementCheckbox = page.getByRole('checkbox', { name: /我已阅读并同意 用户协议 and the 隐私政策./ });
-      await agreementCheckbox.waitFor({ state: 'visible', timeout: 15000 });
-      await agreementCheckbox.check();
-      console.log('    ✅ 已勾选同意条款 (role选择器)');
-    } catch (e) {
-      try {
-        // 备用：通过 ref 选择器
-        await page.waitForSelector('checkbox[ref="e9"]', { state: 'visible', timeout: 15000 });
-        await page.check('checkbox[ref="e9"]', { timeout: 5000 });
-        console.log('    ✅ 已勾选同意条款 (ref=e9)');
-      } catch (e2) {
-        try {
-          // 备用二：通过 label 文本关联
-          await page.waitForSelector('label:has-text("我已阅读并同意 用户协议 and the 隐私政策.") >> input[type="checkbox"]', { state: 'visible', timeout: 15000 });
-          await page.check('label:has-text("我已阅读并同意 用户协议 and the 隐私政策.") >> input[type="checkbox"]', { timeout: 5000 });
-          console.log('    ✅ 已勾选同意条款 (label关联)');
-        } catch (e3) {
-          console.warn('    ⚠️ 勾选同意条款时出错:', e3.message);
-          // 继续尝试，也许按钮已经启用
-        }
-      }
-    }
-    
-    // 4. 处理 Cloudflare 验证（如果出现）
-    console.log('[2.6/5] 检查 Cloudflare 验证...');
-    try {
-      // 检查是否存在 Cloudflare iframe
-      const iframe = await page.waitForSelector('iframe[title="包含 Cloudflare 安全质询的小组件"]', { timeout: 5000 });
-      if (iframe) {
-        console.log('    检测到 Cloudflare 验证 iframe');
-        // 等待 iframe 加载完成
-        await iframe.waitForElementState('stable', { timeout: 5000 });
-        // 获取 iframe 的 frame
-        const frame = iframe.contentFrame();
-        if (frame) {
-          // 在 iframe 中勾选 "请验证您是真人" 复选框
-          await frame.check('text=请验证您是真人', { timeout: 5000 });
-          console.log('    ✅ 已勾选 Cloudflare 验证复选框');
-          // 等待验证完成（可选）
-          await page.waitForTimeout(3000);
-        }
-      }
-    } catch (e) {
-      // 没有找到 Cloudflare iframe，或者已经通过
-      console.log('    未检测到 Cloudflare 验证 iframe，或已通过');
-    }
-    
-    // 5. 等待登录按钮启用
-    console.log('[2.7/5] 等待登录按钮启用...');
-    try {
-      // 等待按钮 ref=e8 且不禁用
-      await page.waitForFunction(() => {
-        const btn = document.querySelector('button[ref="e8"]');
-        return btn && !btn.disabled;
-      }, { timeout: 60000 }); // 增加超时时间
-      console.log('    ✅ 登录按钮已启用 (ref=e8)');
-    } catch (e) {
-      console.warn('    ⚠️ 等待登录按钮启用超时: ', e.message);
-      // 继续尝试点击
-    }
-    
-    // 6. 提交表单
-    console.log('[3/5] 提交表单...');
-    let loginSuccess = false;
-    try {
-      // 点击登录按钮
-      await page.waitForSelector('button[ref="e8"]', { timeout: 10000 });
-      await page.click('button[ref="e8"]', { timeout: 5000 });
-      console.log('    ✅ 登录按钮已点击 (ref=e8)');
-      
-      // 等待导航或响应表明登录成功
-      await page.waitForResponse(resp => resp.url().includes('/api/user/self') && resp.status() === 200, { timeout: 10000 });
-      console.log('    ✅ 检测到登录成功响应 (/api/user/self)');
-      loginSuccess = true;
-    } catch (e) {
-      console.error('    ❌ 无法找到或点击登录按钮:', e.message);
-      await browser.close();
-      process.exit(1);
-    }
-    
     if (!loginSuccess) {
-      // 此情况不应发生，但以防万一
-      console.error('    ❌ 未能完成登录');
+      console.error('    ❌ 未能验证登录成功');
       await browser.close();
       process.exit(1);
     }
-    
-    // 7. 等待登录成功（等待 /api/user/self 返回 200）
-    console.log('[4/5] 等待登录验证...');
-    try {
-      await page.waitForResponse(async (resp) => {
-        return resp.url().includes('/api/user/self') && resp.status() === 200;
-      }, { timeout: 15000 });
-      console.log('    ✅ 登录成功（/api/user/self 返回 200）');
-    } catch (e) {
-      console.error('    ❌ 登录失败，可能验证码挑战或账号密码错误');
-      await browser.close();
-      process.exit(1);
-    }
-    
-    // 8. 保存 storageState 供下次使用
-    console.log('[5/5] 保存登录状态，供下次使用...');
-    // 确保目录存在
+
+    // 7. 保存 storageState 供下次使用
+    console.log('[4/5] 保存登录状态，供下次使用...');
     const fs = await import('fs');
     if (!fs.existsSync('.playwright')) {
       fs.mkdirSync('.playwright', { recursive: true });
     }
     await context.storageState({ path: '.playwright/storageState.json' });
     console.log('    ✅ 状态已保存到 .playwright/storageState.json');
-    
+
     // 获取登录后的 cookies
     cookies = await context.cookies();
-    
-    // 尝试从 cookies 或响应中提取 new-api-user
+
+    // 尝试从 cookies 中提取 new-api-user
     for (const c of cookies) {
       if (c.name === 'new-api-user' || c.name === 'NEW_API_USER') {
         newApiUserValue = c.value;
@@ -357,12 +401,11 @@ if (!USERNAME || !PASSWORD) {
       }
     }
     if (!newApiUserValue) {
-      // 备用：尝试从 /api/user/self 的响应中解析（此处省略复杂解析，实际可通过 page.content() 获取）
       console.warn('    ⚠️ 未自动探测到 new-api-user，将尝试使用已保存的状态或手动提供');
     }
-    
+
     // --- 第三步：使用新获取的 cookies 进行签到 ---
-    console.log('[INFO] 使用新登录会话进行签到...');
+    console.log('[5/5] 使用新登录会话进行签到...');
     const checkinResp = await fetch(CHECKIN_URL, {
       method: 'POST',
       headers: {
@@ -375,13 +418,13 @@ if (!USERNAME || !PASSWORD) {
       },
       body: JSON.stringify({}),
     });
-    
+
     const checkinText = await checkinResp.text();
     let checkinData;
     try { checkinData = JSON.parse(checkinText); } catch { checkinData = { raw: checkinText }; }
-    
+
     console.log('[INFO] Check-in response:', JSON.stringify(checkinData).slice(0, 200));
-    
+
     // 处理签到结果
     const success = checkinData?.success === true;
     const message = checkinData?.message || '';
@@ -389,7 +432,7 @@ if (!USERNAME || !PASSWORD) {
       (message.includes('今日已签到') ||
        message.includes('已经签到') ||
        message.toLowerCase().includes('already'));
-    
+
     if (checkinResp.ok && success) {
       const quota = checkinData?.data?.quota_awarded;
       const date = checkinData?.data?.checkin_date;
@@ -404,6 +447,8 @@ if (!USERNAME || !PASSWORD) {
       console.error(`[FAIL] 签到失败: ${message || checkinText || `HTTP ${checkinResp.status}`}`);
       process.exit(1);
     }
+
+    await browser.close();
   }
 })().catch(err => {
   console.error('[ERROR] 脚本异常:', err);
