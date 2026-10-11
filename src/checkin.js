@@ -4,7 +4,7 @@
  *   1. 优先使用已保存的 Playwright storageState（Cookie + localStorage）
  *   2. 如果没有保存的状态，使用 GitHub Secrets 里的账号密码自动登录
  *   3. 登录成功后保存 storageState，供下次使用
- *   4. 使用保持有效会话的 Cookie 进行签到
+ *   4. 使用 Playwright 自带的 request 上下文进行签到，自动携带所有 Cookie
  *
  * 环境变量（GitHub Secrets 或本地 .env）：
  *   HCNSEC_USERNAME / HCNSEC_PASSWORD   — 用于首次登录/重新登录
@@ -12,10 +12,6 @@
  * 输出：
  *   - 签到成功 / 已签到 / 失败，并返回相应 exit code
  */
-import fetch from 'node-fetch';
-import { chromium } from 'playwright';
-import * as dotenv from 'dotenv';
-
 /* 加载 .env（GitHub Actions 中会自动将 secrets 注入为环境变量） */
 dotenv.config();
 
@@ -62,25 +58,18 @@ if (!USERNAME || !PASSWORD) {
     if (resp && resp.status() === 200) {
       console.log('[INFO] 已成功恢复登录态（storageState 有效）');
 
-      // 获取当前的 cookies
-      cookies = await context.cookies();
-      console.log('[DEBUG] Retrieved cookies from storageState:', cookies.map(c => `${c.name}=${c.value}`).join('; '));
-
-      // --- 第四步：执行签到 ---
+      // --- 第四步：执行签到（使用 Playwright request 自动带 Cookie） ---
       console.log('[INFO] 使用有效会话进行签到...');
-      const checkinResp = await fetch(CHECKIN_URL, {
-        method: 'POST',
+      const checkinResponse = await page.request.post(CHECKIN_URL, {
         headers: {
-          'Host': HOST,
           'Accept': 'application/json, text/plain, */*',
           'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
-          'Cookie': cookies.map(c => `${c.name}=${c.value}`).join('; ') || '',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({}),
+        data: {}
       });
 
-      const checkinText = await checkinResp.text();
+      const checkinText = await checkinResponse.text();
       let checkinData;
       try { checkinData = JSON.parse(checkinText); } catch { checkinData = { raw: checkinText }; }
 
@@ -94,23 +83,23 @@ if (!USERNAME || !PASSWORD) {
          message.includes('已经签到') ||
          message.toLowerCase().includes('already'));
 
-      if (resp.status === 200 && success) {
+      if (checkinResponse.ok() && success) {
         const quota = checkinData?.data?.quota_awarded;
         const date = checkinData?.data?.checkin_date;
         const extra = quota !== undefined ? ` | 获得额度: ${quota}` : '';
         const dateStr = date ? ` | 日期: ${date}` : '';
         console.log(`[SUCCESS] 签到成功${dateStr}${extra}`);
+        await browser.close();
         process.exit(0);
-      } else if (resp.status === 200 && isAlready) {
+      } else if (checkinResponse.ok() && isAlready) {
         console.log(`[INFO] 已签到: ${message || '今日已签到'}`);
+        await browser.close();
         process.exit(0);
       } else {
-        console.error(`[FAIL] 签到失败: ${message || checkinText || `HTTP ${checkinResp.status}`}`);
+        console.error(`[FAIL] 签到失败: ${message || checkinText || `HTTP ${checkinResponse.status()}`}`);
+        await browser.close();
         process.exit(1);
       }
-
-      await browser.close();
-      return; // 正常退出
     } else {
       console.warn('[WARN] storageState 失效（可能已过期或损坏），将重新登录...');
       await browser.close();
@@ -370,31 +359,6 @@ if (!USERNAME || !PASSWORD) {
     if (!fs.existsSync('.playwright')) {
       fs.mkdirSync('.playwright', { recursive: true });
     }
-    
-    // 关键步骤：在保存 storageState 之前，确保 Cookie 设置完成
-    // 记录登录后的初始 Cookie
-    let cookiesAfterLogin = await context.cookies();
-    console.log('[DEBUG] Cookies after login:', cookiesAfterLogin.map(c => `${c.name}=${c.value}`).join('; '));
-    
-    // 访问 /api/user/auth 设置 new_api_refresh cookie
-    await page.goto(`${BASE}/api/user/auth`, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
-    await page.waitForTimeout(500);
-    let cookiesAfterAuth = await context.cookies();
-    console.log('[DEBUG] Cookies after visiting /api/user/auth:', cookiesAfterAuth.map(c => `${c.name}=${c.value}`).join('; '));
-    
-    // 访问根路径设置 new_api_has_session cookie
-    await page.goto(BASE, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
-    await page.waitForTimeout(500);
-    let cookiesAfterBase = await context.cookies();
-    console.log('[DEBUG] Cookies after visiting BASE:', cookiesAfterBase.map(c => `${c.name}=${c.value}`).join('; '));
-    
-    // 再次访问登录状态验证确保一切正常
-    await page.goto(SELF_URL, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
-    await page.waitForTimeout(500);
-    let cookiesAfterSelf = await context.cookies();
-    console.log('[DEBUG] Cookies after visiting SELF_URL:', cookiesAfterSelf.map(c => `${c.name}=${c.value}`).join('; '));
-    
-    // 现在保存 storageState - 应该包含所有必需的 cookie
     await context.storageState({ path: '.playwright/storageState.json' });
     console.log('    ✅ 状态已保存到 .playwright/storageState.json');
 
@@ -403,32 +367,18 @@ if (!USERNAME || !PASSWORD) {
     console.log('[DEBUG] storageState contents:');
     console.log(JSON.stringify(storageState, null, 2));
 
-    // 8. 获取登录后的 cookies (打印详细信息)
-    cookies = await context.cookies();
-    console.log('[DEBUG] Retrieved cookies after login:');
-    cookies.forEach(c => {
-      console.log(`    ${c.name}=${c.value} (domain: ${c.domain}, path: ${c.path}, httpOnly: ${c.httpOnly}, secure: ${c.secure}, expires: ${c.expires}, sameSite: ${c.sameSite})`);
-    });
-    
-    // 同时获取所有可用的cookies（包括可能被过滤掉的）
-    const allCookies = await context.cookies();
-    console.log('[DEBUG] All cookies count:', allCookies.length);
-
-    // --- 第三步：使用新获取的 cookies 进行签到 ---
+    // --- 第五步：使用新登录会话进行签到（使用 Playwright request 自动带 Cookie） ---
     console.log('[5/5] 使用新登录会话进行签到...');
-    const checkinResp = await fetch(CHECKIN_URL, {
-      method: 'POST',
+    const checkinResponse = await page.request.post(CHECKIN_URL, {
       headers: {
-        'Host': HOST,
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
-        'Cookie': cookies.map(c => `${c.name}=${c.value}`).join('; ') || '',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({}),
+      data: {}
     });
 
-    const checkinText = await checkinResp.text();
+    const checkinText = await checkinResponse.text();
     let checkinData;
     try { checkinData = JSON.parse(checkinText); } catch { checkinData = { raw: checkinText }; }
 
@@ -442,22 +392,23 @@ if (!USERNAME || !PASSWORD) {
        message.includes('已经签到') ||
        message.toLowerCase().includes('already'));
 
-    if (checkinResp.ok && success) {
+    if (checkinResponse.ok() && success) {
       const quota = checkinData?.data?.quota_awarded;
       const date = checkinData?.data?.checkin_date;
       const extra = quota !== undefined ? ` | 获得额度: ${quota}` : '';
       const dateStr = date ? ` | 日期: ${date}` : '';
       console.log(`[SUCCESS] 签到成功${dateStr}${extra}`);
+      await browser.close();
       process.exit(0);
-    } else if (checkinResp.ok && isAlready) {
+    } else if (checkinResponse.ok() && isAlready) {
       console.log(`[INFO] 已签到: ${message || '今日已签到'}`);
+      await browser.close();
       process.exit(0);
     } else {
-      console.error(`[FAIL] 签到失败: ${message || checkinText || `HTTP ${checkinResp.status}`}`);
+      console.error(`[FAIL] 签到失败: ${message || checkinText || `HTTP ${checkinResponse.status()}`}`);
+      await browser.close();
       process.exit(1);
     }
-
-    await browser.close();
   }
 })().catch(err => {
   console.error('[ERROR] 脚本异常:', err);
