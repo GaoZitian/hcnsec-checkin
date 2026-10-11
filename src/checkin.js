@@ -307,12 +307,20 @@ if (!USERNAME || !PASSWORD) {
     }
 
     // 可选：调试查看页面可访问的 Cookie（仅非 HttpOnly）
-    const allCookies = await page.evaluate(() => document.cookie);
-    console.log('[DEBUG] All page cookies (non-HttpOnly):', allCookies);
+    const allCookies = await page.context().cookies();
+    console.log('[DEBUG] All page cookies (including HttpOnly):', allCookies);
+    
+    // 构建包含所有 Cookie 的字符串（包括 HttpOnly）
+    let cookieString = '';
+    for (const cookie of allCookies) {
+      cookieString += `${cookie.name}=${cookie.value}; `;
+    }
+    cookieString = cookieString.replace(/; $/, '');
+    console.log('[DEBUG] Constructed Cookie string for checkin:', cookieString || '(空)');
 
     // --- 第三步：使用新登录会话进行签到 ---
-    // Playwright 的 page.request.post 会自动携带浏览器上下文中所有有效的 Cookie（包括 HttpOnly），
-    // 无需手动拼接 Cookie 字符串。
+    // 使用从浏览器上下文获取的完整 Cookie 字符串（包括 HttpOnly），
+    // 确保所有 3 个关键认证 Cookie 都被发送。
     console.log('[3/5] 使用新登录会话进行签到...');
     console.log('[3.1/5] 发送签到请求...');
     const checkinResponse = await page.request.post(CHECKIN_URL, {
@@ -320,6 +328,7 @@ if (!USERNAME || !PASSWORD) {
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
         'Content-Type': 'application/json',
+        'Cookie': cookieString,
       },
       data: JSON.stringify({}),
     });
