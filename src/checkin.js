@@ -72,12 +72,27 @@ if (!USERNAME || !PASSWORD) {
     }
   });
 
-  // 1. 打开登录页
+  // 1. 打开登录页（带重试，防止网络抖动）
   console.log('[1.1/5] 打开登录页...');
-  try {
-    await page.goto('https://api.hcnsec.cn/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
-  } catch (e) {
-    console.warn('[WARN] 登录页加载超时，尝试继续...', e.message);
+  let loginPageLoaded = false;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await page.goto('https://api.hcnsec.cn/login', { waitUntil: 'domcontentloaded', timeout: 120000 });
+      loginPageLoaded = true;
+      console.log(`    ✅ 登录页加载成功 (尝试 ${attempt}/2)`);
+      break;
+    } catch (e) {
+      console.warn(`[WARN] 登录页加载失败 (尝试 ${attempt}/2):`, e.message);
+      if (attempt < 2) {
+        console.log('    等待 5 秒后重试...');
+        await page.waitForTimeout(5000);
+      }
+    }
+  }
+  if (!loginPageLoaded) {
+    console.error('[ERROR] 登录页加载失败，已达最大重试次数');
+    await browser.close();
+    process.exit(1);
   }
 
   // 等待页面 JS 渲染稳定
