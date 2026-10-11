@@ -406,13 +406,13 @@ if (!USERNAME || !PASSWORD) {
     await browser.close();
     process.exit(0);
   } else {
-    const httpStatus = checkinResponse.status();
+    const httpStatus = checkinResponse.status;
     const errorMessage = message || checkinText || `HTTP ${httpStatus}`;
     console.error(`[FAIL] 签到失败: ${errorMessage}`);
     await browser.close();
     process.exit(1);
   }
-})().catch(err => {
+}).catch(err => {
   console.error('[ERROR] 脚本异常:', err);
   process.exit(1);
 });
