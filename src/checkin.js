@@ -303,48 +303,10 @@ if (!USERNAME || !PASSWORD) {
   }
 
   // --- 第二步：确保所有认证 Cookie 已存入浏览器上下文 ---
-  // 登录后，访问设置关键 Cookie 的路径，以确保它们被浏览器上下文捕获。
-  // 即使是 HttpOnly Cookie，也会被 Playwright 的 request 上下文自动携带。
-  console.log('[2.5/5] 访问关键路径以捕获所有认证 Cookie...');
-  try {
-    // 访问 /api/user/auth 以获取 new_api_refresh (path=/api/user/auth, HttpOnly)
-    console.log('[DEBUG] Visiting /api/user/auth');
-    const authResponse = await page.goto(`${BASE}/api/user/auth`, { waitUntil: 'networkidle', timeout: 10000 });
-    if (authResponse) {
-      const headers = authResponse.headers();
-      console.log(`[DEBUG] /api/user/auth response status:`, authResponse.status());
-      // 关键：记录 Set-Cookie headers
-      const setCookie = headers['set-cookie'];
-      if (setCookie) {
-        console.log('[DEBUG] /api/user/auth Set-Cookie headers:', setCookie);
-      } else {
-        console.log('[DEBUG] /api/user/auth no Set-Cookie headers found');
-      }
-    }
-    await page.waitForTimeout(1000);
-    console.log('[DEBUG] Cookies after visiting /api/user/auth:', await page.context().cookies());
-
-    // 访问 首页 / 以获取 new_api_has_session (path=/)
-    console.log('[DEBUG] Visiting /');
-    const rootResponse = await page.goto(`${BASE}/`, { waitUntil: 'networkidle', timeout: 10000 });
-    if (rootResponse) {
-      const headers = rootResponse.headers();
-      console.log(`[DEBUG] / response status:`, rootResponse.status());
-      // 关键：记录 Set-Cookie headers
-      const setCookie = headers['set-cookie'];
-      if (setCookie) {
-        console.log('[DEBUG] / Set-Cookie headers:', setCookie);
-      } else {
-        console.log('[DEBUG] / no Set-Cookie headers found');
-      }
-    }
-    await page.waitForTimeout(1000);
-    console.log('[DEBUG] Cookies after visiting /:', await page.context().cookies());
-
-    console.log('    ✅ 已访问 /api/user/auth 和 /');
-  } catch (e) {
-    console.warn('    ⚠️ 访问关键路径时出错，但继续:', e.message);
-  }
+  // 登录后，浏览器上下文应该已经包含所有 Cookie（包括 HttpOnly）。
+  // 使用 page.request.post 会自动发送上下文中的所有 Cookie。
+  // 不再访问 /api/user/auth 和 /，因为它们返回 401 且不设置 Cookie。
+  console.log('    ✅ 已完成登录 - 浏览器上下文已包含 Cookie');
 
   // 可选：调试查看页面可访问的 Cookie（包括 HttpOnly 和非 HttpOnly）
   const allCookies = await page.context().cookies();
