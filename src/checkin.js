@@ -296,11 +296,25 @@ if (!USERNAME || !PASSWORD) {
     console.log('[2.5/5] 访问关键路径以捕获所有认证 Cookie...');
     try {
       // 访问 /api/user/auth 以获取 new_api_refresh (path=/api/user/auth, HttpOnly)
-      await page.goto(`${BASE}/api/user/auth`, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      console.log('[DEBUG] Visiting /api/user/auth');
+      const authResponse = await page.goto(`${BASE}/api/user/auth`, { waitUntil: 'networkidle', timeout: 10000 });
+      if (authResponse) {
+        console.log(`[DEBUG] /api/user/auth response status:`, authResponse.status());
+        console.log(`[DEBUG] /api/user/auth response headers:`, authResponse.headers());
+      }
       await page.waitForTimeout(1000);
+      console.log('[DEBUG] Cookies after visiting /api/user/auth:', await page.context().cookies());
+
       // 访问 首页 / 以获取 new_api_has_session (path=/)
-      await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      console.log('[DEBUG] Visiting /');
+      const rootResponse = await page.goto(`${BASE}/`, { waitUntil: 'networkidle', timeout: 10000 });
+      if (rootResponse) {
+        console.log(`[DEBUG] / response status:`, rootResponse.status());
+        console.log(`[DEBUG] / response headers:`, rootResponse.headers());
+      }
       await page.waitForTimeout(1000);
+      console.log('[DEBUG] Cookies after visiting /:', await page.context().cookies());
+
       console.log('    ✅ 已访问 /api/user/auth 和 /');
     } catch (e) {
       console.warn('    ⚠️ 访问关键路径时出错，但继续:', e.message);
