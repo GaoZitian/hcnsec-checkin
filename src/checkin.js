@@ -57,15 +57,18 @@ if (!USERNAME || !PASSWORD) {
   page.setDefaultTimeout(60000);
   page.setDefaultNavigationTimeout(60000);
 
-  // 监听所有响应以捕获 Set-Cookie 头
+  // --- 关键：全局响应监听器捕获登录响应的 Set-Cookie 头 ---
+  let capturedLoginCookies = [];
   page.on('response', async response => {
     const url = response.url();
     const setCookie = response.headers()['set-cookie'];
-    if (setCookie) {
-      // 只记录我们关心的域的cookie
-      if (url.includes('api.hcnsec.cn')) {
-        console.log(`[DEBUG RESPONSE] ${url} -> Set-Cookie:`, setCookie[0]?.split(';')[0]);
-      }
+    if (setCookie && url.includes('/login') && response.request().method() === 'POST') {
+      // 登录 POST 响应，捕获所有 Set-Cookie
+      console.log('[DEBUG LOGIN RESPONSE] Full Set-Cookie headers:', setCookie);
+      capturedLoginCookies = setCookie.map(c => c.split(';')[0].trim()).join('; ');
+      console.log('[DEBUG] Captured login cookie string:', capturedLoginCookies);
+    } else if (setCookie && url.includes('api.hcnsec.cn')) {
+      console.log(`[DEBUG RESPONSE] ${url} -> Set-Cookie:`, setCookie);
     }
   });
 
@@ -265,6 +268,21 @@ if (!USERNAME || !PASSWORD) {
     }
   }
 
+  // --- 关键：拦截登录响应以直接捕获 Set-Cookie headers ---
+  let loginResponseCookies = [];
+  // 监听所有响应，捕获登录 POST 的 Set-Cookie
+  const responseHandler = async (resp) => {
+    const url = resp.url();
+    if (url.includes('/login') && resp.request().method() === 'POST') {
+      const setCookie = resp.headers()['set-cookie'];
+      if (setCookie) {
+        console.log('[DEBUG LOGIN RESPONSE] Set-Cookie headers captured:', setCookie);
+        loginResponseCookies = setCookie;
+      }
+    }
+  };
+  page.on('response', responseHandler);
+
   // 7. 等待登录成功（等待 /api/user/self 返回 200 或页面跳转）
   console.log('[1.7/5] 等待登录验证...');
   let loginSuccess = false;
@@ -393,28 +411,40 @@ if (!USERNAME || !PASSWORD) {
   cookieString = cookieString.replace(/; $/, '');
   console.log('[DEBUG] Constructed Cookie string for checkin:', cookieString || '(空)');
 
-  // --- 第三步：使用新登录会话进行签到 ---
+    // --- 第三步：使用新登录会话进行签到 ---
   // 使用 page.evaluate 发送请求，这样可以确保浏览器上下文中的所有 Cookie（包括 HttpOnly）都被自动携带
   console.log('[3/5] 使用新登录会话进行签到...');
   console.log('[3.1/5] 发送签到请求...');
-  const checkinText = await page.evaluate(async (url) => {
+
+  // 关键：使用捕获的登录响应 Cookie 手动构建 Cookie 头
+  // 如果浏览器上下文没有捕获到 HttpOnly cookie，我们手动补充
+  const manualCookieHeader = (typeof capturedLoginCookies !== 'undefined' && capturedLoginCookies) ? capturedLoginCookies : '';
+  console.log('[DEBUG] Manual cookie header for checkin:', manualCookieHeader || '(无捕获到的登录响应 Cookie)');
+
+  const checkinText = await page.evaluate(async ({ url, cookieHeader }) => {
+    const headers = {
+      'Accept': 'application/json, text/plain, */*',
+      'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
+      'Content-Type': 'application/json',
+    };
+    if (cookieHeader) {
+      headers['Cookie'] = cookieHeader;
+    }
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
-        'Content-Type': 'application/json',
-      },
+      headers: headers,
       body: JSON.stringify({}),
       credentials: 'include' // 确保发送 Cookie
     });
     return await response.text();
-  }, CHECKIN_URL);
+  }, { url: CHECKIN_URL, cookieHeader: manualCookieHeader });
 
   let checkinData;
   try { checkinData = JSON.parse(checkinText); } catch { checkinData = { raw: checkinText }; }
 
   console.log('[INFO] Check-in response:', JSON.stringify(checkinData).slice(0, 200));
+
+
 
       // 处理签到结果
   const success = checkinData?.success === true;
