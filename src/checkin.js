@@ -366,18 +366,23 @@ if (!USERNAME || !PASSWORD) {
   console.log('[3/5] 使用新登录会话进行签到...');
   console.log('[3.1/5] 发送签到请求...');
   const checkinResponse = await page.evaluate(async (url) => {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({}),
-      credentials: 'include' // 确保发送 Cookie
-    });
-    return response;
-  }, CHECKIN_URL);
+      console.log('[DEBUG] fetch started for:', url);
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json, text/plain, */*',
+          'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({}),
+        credentials: 'include'
+      });
+      console.log('[DEBUG] fetch completed, response type:', typeof response);
+      console.log('[DEBUG] response has text method:', typeof response.text === 'function');
+      return response;
+    }, CHECKIN_URL);
+  console.log('[DEBUG] checkinResponse type after evaluate:', typeof checkinResponse);
+  console.log('[DEBUG] checkinResponse has text method:', typeof checkinResponse.text === 'function');
 
   const checkinText = await checkinResponse.text();
   let checkinData;
