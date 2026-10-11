@@ -43,7 +43,8 @@ if (!USERNAME || !PASSWORD) {
 /* 2. 主要逻辑 – 始终使用账号密码登录 */
 /* ────────────────────────────────────────────────────────────── */
 (async () => {
-  console.log('[INFO] HCNSec daily check-in starting...');
+  try {
+    console.log('[INFO] HCNSec daily check-in starting...');
 
   /* --- 第一步：使用账号密码自动登录 --- */
   console.log('[1/5] 使用账号密码自动登录...');
@@ -412,4 +413,4 @@ if (!USERNAME || !PASSWORD) {
     await browser.close();
     process.exit(1);
   }
-}).catch(err => { console.error("[ERROR] 脚本异常:", err); process.exit(1); })
+} catch (err) { console.error("[ERROR] 脚本异常:", err); process.exit(1); } })()
