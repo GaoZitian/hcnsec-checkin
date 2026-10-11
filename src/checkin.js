@@ -68,7 +68,7 @@ if (!USERNAME || !PASSWORD) {
     if (resp && resp.status() === 200) {
       const data = await page.evaluate(() => {
         // 在页面上下文中获取 JSON（实际可能需要通过 API 响应捕获）
-        // 这里简化处理：直接尝试 fetch 一次验证
+        // 这里简化处理：直接尝试 fetch 一次验化
         return 'session_valid';
       });
       console.log('[INFO] 已成功恢复登录态（storageState 有效）');
@@ -165,36 +165,70 @@ if (!USERNAME || !PASSWORD) {
       console.warn('[WARN] 页面加载超时，尝试继续...', e.message);
     }
     
+    // 等待页面完全加载并检查是否在登录页
+    try {
+      await page.waitForFunction(() => {
+        return document.querySelector('textbox[ref="e7"]') !== null;
+      }, { timeout: 10000 });
+      console.log('    ✅ 登录表单已加载');
+    } catch (e) {
+      console.warn('    ⚠️ 等待登录表单超时，但继续尝试填充');
+    }
+    
     // 2. 填入账号密码
     console.log('[2/5] 填入用户名和密码...');
     // 使用精确的 ref 选择器（基于实际DOM结构）
     try {
+      // 等待用户名输入框出现
+      await page.waitForSelector('textbox[ref="e7"]', { timeout: 10000 });
       await page.fill('textbox[ref="e7"]', USERNAME, { timeout: 5000 });
       console.log('    ✅ 用户名已填入 (ref=e7)');
     } catch (e) {
       // 备用选择器
       try {
+        await page.waitForSelector('input[placeholder="用户名或电子邮件"]', { timeout: 10000 });
         await page.fill('input[placeholder="用户名或电子邮件"]', USERNAME, { timeout: 5000 });
         console.log('    ✅ 用户名已填入 (placeholder: 用户名或电子邮件)');
       } catch (e2) {
-        console.error('    ❌ 无法填入用户名');
-        await browser.close();
-        process.exit(1);
+        try {
+          await page.waitForSelector('input[placeholder*="用户名"]', { timeout: 10000 });
+          await page.fill('input[placeholder*="用户名"]', USERNAME, { timeout: 5000 });
+          console.log('    ✅ 用户名已填入 (placeholder*="用户名")');
+        } catch (e3) {
+          try {
+            await page.waitForSelector('input[name="username"]', { timeout: 10000 });
+            await page.fill('input[name="username"]', USERNAME, { timeout: 5000 });
+            console.log('    ✅ 用户名已填入 (name="username")');
+          } catch (e4) {
+            console.error('    ❌ 无法填入用户名');
+            await browser.close();
+            process.exit(1);
+          }
+        }
       }
     }
     
     try {
+      // 等待密码输入框出现
+      await page.waitForSelector('textbox[ref="e16"]', { timeout: 10000 });
       await page.fill('textbox[ref="e16"]', PASSWORD, { timeout: 5000 });
       console.log('    ✅ 密码已填入 (ref=e16)');
     } catch (e) {
       // 备用选择器
       try {
+        await page.waitForSelector('input[placeholder="密码"]', { timeout: 10000 });
         await page.fill('input[placeholder="密码"]', PASSWORD, { timeout: 5000 });
         console.log('    ✅ 密码已填入 (placeholder: 密码)');
       } catch (e2) {
-        console.error('    ❌ 无法填入密码');
-        await browser.close();
-        process.exit(1);
+        try {
+          await page.waitForSelector('input[type="password"]', { timeout: 10000 });
+          await page.fill('input[type="password"]', PASSWORD, { timeout: 5000 });
+          console.log('    ✅ 密码已填入 (type="password")');
+        } catch (e3) {
+          console.error('    ❌ 无法填入密码');
+          await browser.close();
+          process.exit(1);
+        }
       }
     }
 
@@ -202,11 +236,13 @@ if (!USERNAME || !PASSWORD) {
     console.log('[2.5/5] 勾选同意条款...');
     try {
       // 通过 ref 选择器（最可靠）
+      await page.waitForSelector('checkbox[ref="e9"]', { timeout: 10000 });
       await page.check('checkbox[ref="e9"]', { timeout: 5000 });
       console.log('    ✅ 已勾选同意条款 (ref=e9)');
     } catch (e) {
       try {
         // 备用：通过 label 文本关联
+        await page.waitForSelector('label:has-text("我已阅读并同意 用户协议 and the 隐私政策.") >> input[type="checkbox"]', { timeout: 10000 });
         await page.check('label:has-text("我已阅读并同意 用户协议 and the 隐私政策.") >> input[type="checkbox"]', { timeout: 5000 });
         console.log('    ✅ 已勾选同意条款 (label关联)');
       } catch (e2) {
@@ -258,6 +294,7 @@ if (!USERNAME || !PASSWORD) {
     let loginSuccess = false;
     try {
       // 点击登录按钮
+      await page.waitForSelector('button[ref="e8"]', { timeout: 10000 });
       await page.click('button[ref="e8"]', { timeout: 5000 });
       console.log('    ✅ 登录按钮已点击 (ref=e8)');
       
