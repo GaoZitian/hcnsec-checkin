@@ -372,19 +372,29 @@ if (!USERNAME || !PASSWORD) {
     }
     
     // 关键步骤：在保存 storageState 前，访问关键路径确保所有 cookies 都被捕获
-    // new_api_refresh 通常在 /api/user/auth 设置，new_api_has_session 在根路径
-    // 但有时需要多次尝试或更长的等待时间
-    console.log('[DEBUG] Attempting to capture all cookies before storageState save...');
+    // 根据用户提供的响应头，cookies 被设置在特定路径
+    console.log('[DEBUG] Visiting specific endpoints to capture all cookies...');
     
-    // 尝试多次访问以确保 cookies 被设置
-    for (let i = 0; i < 3; i++) {
-      await page.goto(`${BASE}/api/user/auth`, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
-      await page.waitForTimeout(500);
-      await page.goto(BASE, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
-      await page.waitForTimeout(500);
-    }
+    // 先访问登录成功后的页面确保会话已建立
+    await page.goto(BASE, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(1000);
     
-    // 保存 storageState - 应该包含所有 3 个 cookie
+    // 访问 /api/user/auth 以捕获 new_api_refresh cookie
+    console.log('[DEBUG] Visiting /api/user/auth for new_api_refresh...');
+    await page.goto(`${BASE}/api/user/auth`, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(1000);
+    
+    // 访问根路径以捕获 new_api_has_session cookie
+    console.log('[DEBUG] Visiting / for new_api_has_session...');
+    await page.goto(BASE, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(1000);
+    
+    // 再次访问登录状态验证端点确保一切正常
+    console.log('[DEBUG] Final verification of login state...');
+    await page.goto(SELF_URL, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(1000);
+    
+    // 现在保存 storageState - 应该包含所有必需的 cookie
     await context.storageState({ path: '.playwright/storageState.json' });
     console.log('    ✅ 状态已保存到 .playwright/storageState.json');
 
