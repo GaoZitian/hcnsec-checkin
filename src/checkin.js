@@ -373,9 +373,12 @@ if (!USERNAME || !PASSWORD) {
     await context.storageState({ path: '.playwright/storageState.json' });
     console.log('    ✅ 状态已保存到 .playwright/storageState.json');
 
-    // 8. 获取登录后的 cookies
+    // 8. 获取登录后的 cookies (打印详细信息)
     cookies = await context.cookies();
-    console.log('[DEBUG] Retrieved cookies after login:', cookies.map(c => `${c.name}=${c.value}`).join('; '));
+    console.log('[DEBUG] Retrieved cookies after login:');
+    cookies.forEach(c => {
+      console.log(`    ${c.name}=${c.value} (domain: ${c.domain}, path: ${c.path}, httpOnly: ${c.httpOnly}, secure: ${c.secure}, expires: ${c.expires})`);
+    });
 
     // --- 第三步：使用新获取的 cookies 进行签到 ---
     console.log('[5/5] 使用新登录会话进行签到...');
