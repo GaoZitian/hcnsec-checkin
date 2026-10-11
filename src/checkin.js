@@ -77,8 +77,29 @@ if (!USERNAME || !PASSWORD) {
         }
       }
 
+      // 如果 cookies 里没有，尝试从页面 localStorage 探测
       if (!newApiUserValue) {
-        console.warn('[WARN] 未在 cookies 中找到 new-api-user，将尝试从响应头/体中解析');
+        try {
+          const lsValue = await page.evaluate(() => {
+            const keys = Object.keys(localStorage);
+            for (const key of keys) {
+              if (key.toLowerCase().includes('new-api-user') || key.toLowerCase().includes('new_api_user')) {
+                return localStorage.getItem(key);
+              }
+            }
+            return null;
+          });
+          if (lsValue) {
+            newApiUserValue = lsValue;
+            console.log('    ✅ 从 localStorage 探测到 new-api-user');
+          }
+        } catch (e) {
+          // 忽略
+        }
+      }
+
+      if (!newApiUserValue) {
+        console.warn('[WARN] 未在 cookies/localStorage 中找到 new-api-user，将尝试从响应头/体中解析');
       }
 
       // --- 第四步：执行签到 ---
@@ -398,6 +419,38 @@ if (!USERNAME || !PASSWORD) {
       if (c.name === 'new-api-user' || c.name === 'NEW_API_USER') {
         newApiUserValue = c.value;
         break;
+      }
+    }
+
+    // 如果 cookies 里没有，尝试从页面 localStorage 或响应体中探测
+    if (!newApiUserValue) {
+      try {
+        const lsValue = await page.evaluate(() => {
+          // 尝试查找 localStorage 中的 new-api-user 或类似键
+          const keys = Object.keys(localStorage);
+          for (const key of keys) {
+            if (key.toLowerCase().includes('new-api-user') || key.toLowerCase().includes('new_api_user')) {
+              return localStorage.getItem(key);
+            }
+          }
+          // 如果没有，返回 null 让下面的逻辑继续
+          return null;
+        });
+        if (lsValue) {
+          newApiUserValue = lsValue;
+          console.log('    ✅ 从 localStorage 探测到 new-api-user');
+        } else {
+          // 备用：尝试从页面上下文中查找 meta 标签或脚本变量
+          const metaMatch = await page.content().match(/["']new-api-user["']\s*[:=]\s*["']([^"']+)["']/);
+          if (metaMatch) {
+            newApiUserValue = metaMatch[1];
+            console.log('    ✅ 从页面内容探测到 new-api-user');
+          } else {
+            console.log('    ⚠️ 在页面中未探测到 new-api-user，将尝试使用已保存的状态或手动提供');
+          }
+        }
+      } catch (e) {
+        console.warn('    ⚠️ 探测 new-api-user 时出错: ', e.message);
       }
     }
     if (!newApiUserValue) {
