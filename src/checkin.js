@@ -299,8 +299,15 @@ if (!USERNAME || !PASSWORD) {
       console.log('[DEBUG] Visiting /api/user/auth');
       const authResponse = await page.goto(`${BASE}/api/user/auth`, { waitUntil: 'networkidle', timeout: 10000 });
       if (authResponse) {
+        const headers = authResponse.headers();
         console.log(`[DEBUG] /api/user/auth response status:`, authResponse.status());
-        console.log(`[DEBUG] /api/user/auth response headers:`, authResponse.headers());
+        // 关键：记录 Set-Cookie headers
+        const setCookie = headers['set-cookie'];
+        if (setCookie) {
+          console.log('[DEBUG] /api/user/auth Set-Cookie headers:', setCookie);
+        } else {
+          console.log('[DEBUG] /api/user/auth no Set-Cookie headers found');
+        }
       }
       await page.waitForTimeout(1000);
       console.log('[DEBUG] Cookies after visiting /api/user/auth:', await page.context().cookies());
@@ -309,8 +316,15 @@ if (!USERNAME || !PASSWORD) {
       console.log('[DEBUG] Visiting /');
       const rootResponse = await page.goto(`${BASE}/`, { waitUntil: 'networkidle', timeout: 10000 });
       if (rootResponse) {
+        const headers = rootResponse.headers();
         console.log(`[DEBUG] / response status:`, rootResponse.status());
-        console.log(`[DEBUG] / response headers:`, rootResponse.headers());
+        // 关键：记录 Set-Cookie headers
+        const setCookie = headers['set-cookie'];
+        if (setCookie) {
+          console.log('[DEBUG] / Set-Cookie headers:', setCookie);
+        } else {
+          console.log('[DEBUG] / no Set-Cookie headers found');
+        }
       }
       await page.waitForTimeout(1000);
       console.log('[DEBUG] Cookies after visiting /:', await page.context().cookies());
