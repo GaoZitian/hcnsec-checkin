@@ -276,6 +276,30 @@ if (!USERNAME || !PASSWORD) {
     }, { timeout: 15000 });
     console.log('    ✅ 登录成功（/api/user/self 返回 200）');
     loginSuccess = true;
+    // --- 关键：完整的 Cookie 捕获序列 ---
+    // 步骤1：等待页面静态，确保所有 Set-Cookie 已处理
+    await page.waitForTimeout(3000);
+    
+    // 步骤2：访问根路径，触发可能的 Cookie 重新评估
+    try {
+      await page.goto('https://api.hcnsec.cn/', { waitUntil: 'networkidle0', timeout: 15000 });
+    } catch (e) {
+      // 忽略根路径访问失败
+    }
+    
+    // 步骤3：确认登录有效性
+    try {
+      await page.goto('https://api.hcnsec.cn/api/user/self', { waitUntil: 'networkidle0', timeout: 15000 });
+    } catch (e) {
+      // 忽略验证失败
+    }
+    
+    // 步骤4：访问 /api/user/auth 激活 HttpOnly cookie
+    try {
+      await page.goto('https://api.hcnsec.cn/api/user/auth', { waitUntil: 'networkidle0', timeout: 15000 });
+    } catch (e) {
+      // 忽略 /api/user/auth 访问失败
+    }
     // --- 新增：访问 /api/user/auth 以激活 Cookie path 范围 ---
     // new_api_refresh 的 path=/api/user/auth，通过访问该路径让浏览器将其范围扩大到 /api/user/checkin
     try {
