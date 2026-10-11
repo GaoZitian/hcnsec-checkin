@@ -64,6 +64,7 @@ if (!USERNAME || !PASSWORD) {
 
       // 获取当前的 cookies
       cookies = await context.cookies();
+      console.log('[DEBUG] Retrieved cookies from storageState:', cookies.map(c => `${c.name}=${c.value}`).join('; '));
 
       // --- 第四步：执行签到 ---
       console.log('[INFO] 使用有效会话进行签到...');
@@ -374,6 +375,7 @@ if (!USERNAME || !PASSWORD) {
 
     // 8. 获取登录后的 cookies
     cookies = await context.cookies();
+    console.log('[DEBUG] Retrieved cookies after login:', cookies.map(c => `${c.name}=${c.value}`).join('; '));
 
     // --- 第三步：使用新获取的 cookies 进行签到 ---
     console.log('[5/5] 使用新登录会话进行签到...');
