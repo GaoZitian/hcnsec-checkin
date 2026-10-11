@@ -236,13 +236,13 @@ if (!USERNAME || !PASSWORD) {
     console.log('[2.5/5] 勾选同意条款...');
     try {
       // 通过 ref 选择器（最可靠）
-      await page.waitForSelector('checkbox[ref="e9"]', { timeout: 10000 });
+      await page.waitForSelector('checkbox[ref="e9"]', { state: 'visible', timeout: 15000 });
       await page.check('checkbox[ref="e9"]', { timeout: 5000 });
       console.log('    ✅ 已勾选同意条款 (ref=e9)');
     } catch (e) {
       try {
         // 备用：通过 label 文本关联
-        await page.waitForSelector('label:has-text("我已阅读并同意 用户协议 and the 隐私政策.") >> input[type="checkbox"]', { timeout: 10000 });
+        await page.waitForSelector('label:has-text("我已阅读并同意 用户协议 and the 隐私政策.") >> input[type="checkbox"]', { state: 'visible', timeout: 15000 });
         await page.check('label:has-text("我已阅读并同意 用户协议 and the 隐私政策.") >> input[type="checkbox"]', { timeout: 5000 });
         console.log('    ✅ 已勾选同意条款 (label关联)');
       } catch (e2) {
