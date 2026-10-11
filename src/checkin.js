@@ -306,9 +306,12 @@ if (!USERNAME || !PASSWORD) {
       console.warn('    ⚠️ 访问关键路径时出错，但继续:', e.message);
     }
 
-    // 可选：调试查看页面可访问的 Cookie（仅非 HttpOnly）
+    // 可选：调试查看页面可访问的 Cookie（包括 HttpOnly 和非 HttpOnly）
     const allCookies = await page.context().cookies();
-    console.log('[DEBUG] All page cookies (including HttpOnly):', allCookies);
+    console.log('[DEBUG] All page cookies count:', allCookies.length);
+    for (const cookie of allCookies) {
+      console.log(`    Cookie: ${cookie.name}=${cookie.value} (domain: ${cookie.domain}, path: ${cookie.path}, httpOnly: ${cookie.httpOnly}, secure: ${cookie.secure})`);
+    }
     
     // 构建包含所有 Cookie 的字符串（包括 HttpOnly）
     let cookieString = '';
