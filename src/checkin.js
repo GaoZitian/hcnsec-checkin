@@ -382,8 +382,12 @@ if (!USERNAME || !PASSWORD) {
     cookies = await context.cookies();
     console.log('[DEBUG] Retrieved cookies after login:');
     cookies.forEach(c => {
-      console.log(`    ${c.name}=${c.value} (domain: ${c.domain}, path: ${c.path}, httpOnly: ${c.httpOnly}, secure: ${c.secure}, expires: ${c.expires})`);
+      console.log(`    ${c.name}=${c.value} (domain: ${c.domain}, path: ${c.path}, httpOnly: ${c.httpOnly}, secure: ${c.secure}, expires: ${c.expires}, sameSite: ${c.sameSite})`);
     });
+    
+    // 同时获取所有可用的cookies（包括可能被过滤掉的）
+    const allCookies = await context.cookies();
+    console.log('[DEBUG] All cookies count:', allCookies.length);
 
     // --- 第三步：使用新获取的 cookies 进行签到 ---
     console.log('[5/5] 使用新登录会话进行签到...');
