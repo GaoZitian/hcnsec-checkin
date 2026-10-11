@@ -322,19 +322,22 @@ if (!USERNAME || !PASSWORD) {
     console.log('[DEBUG] Constructed Cookie string for checkin:', cookieString || '(空)');
 
     // --- 第三步：使用新登录会话进行签到 ---
-    // 使用从浏览器上下文获取的完整 Cookie 字符串（包括 HttpOnly），
-    // 确保所有 3 个关键认证 Cookie 都被发送。
+    // 使用 page.evaluate 发送请求，这样可以确保浏览器上下文中的所有 Cookie（包括 HttpOnly）都被自动携带
     console.log('[3/5] 使用新登录会话进行签到...');
     console.log('[3.1/5] 发送签到请求...');
-    const checkinResponse = await page.request.post(CHECKIN_URL, {
-      headers: {
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
-        'Content-Type': 'application/json',
-        'Cookie': cookieString,
-      },
-      data: JSON.stringify({}),
-    });
+    const checkinResponse = await page.evaluate(async (url) => {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json, text/plain, */*',
+          'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({}),
+        credentials: 'include' // 确保发送 Cookie
+      });
+      return response;
+    }, CHECKIN_URL);
 
     const checkinText = await checkinResponse.text();
     let checkinData;
