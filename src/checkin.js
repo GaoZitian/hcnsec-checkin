@@ -235,19 +235,27 @@ if (!USERNAME || !PASSWORD) {
     // 3. 勾选同意条款
     console.log('[2.5/5] 勾选同意条款...');
     try {
-      // 通过 ref 选择器（最可靠）
-      await page.waitForSelector('checkbox[ref="e9"]', { state: 'visible', timeout: 15000 });
-      await page.check('checkbox[ref="e9"]', { timeout: 5000 });
-      console.log('    ✅ 已勾选同意条款 (ref=e9)');
+      // 使用角色选择器（最可靠）
+      const agreementCheckbox = page.getByRole('checkbox', { name: /我已阅读并同意 用户协议 and the 隐私政策./ });
+      await agreementCheckbox.waitFor({ state: 'visible', timeout: 15000 });
+      await agreementCheckbox.check();
+      console.log('    ✅ 已勾选同意条款 (role选择器)');
     } catch (e) {
       try {
-        // 备用：通过 label 文本关联
-        await page.waitForSelector('label:has-text("我已阅读并同意 用户协议 and the 隐私政策.") >> input[type="checkbox"]', { state: 'visible', timeout: 15000 });
-        await page.check('label:has-text("我已阅读并同意 用户协议 and the 隐私政策.") >> input[type="checkbox"]', { timeout: 5000 });
-        console.log('    ✅ 已勾选同意条款 (label关联)');
+        // 备用：通过 ref 选择器
+        await page.waitForSelector('checkbox[ref="e9"]', { state: 'visible', timeout: 15000 });
+        await page.check('checkbox[ref="e9"]', { timeout: 5000 });
+        console.log('    ✅ 已勾选同意条款 (ref=e9)');
       } catch (e2) {
-        console.warn('    ⚠️ 勾选同意条款时出错:', e2.message);
-        // 继续尝试，也许按钮已经启用
+        try {
+          // 备用二：通过 label 文本关联
+          await page.waitForSelector('label:has-text("我已阅读并同意 用户协议 and the 隐私政策.") >> input[type="checkbox"]', { state: 'visible', timeout: 15000 });
+          await page.check('label:has-text("我已阅读并同意 用户协议 and the 隐私政策.") >> input[type="checkbox"]', { timeout: 5000 });
+          console.log('    ✅ 已勾选同意条款 (label关联)');
+        } catch (e3) {
+          console.warn('    ⚠️ 勾选同意条款时出错:', e3.message);
+          // 继续尝试，也许按钮已经启用
+        }
       }
     }
     
