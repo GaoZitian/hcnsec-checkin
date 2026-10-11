@@ -8,31 +8,28 @@
  *
  * 环境变量（GitHub Secrets 或本地 .env）：
  *   HCNSEC_USERNAME / HCNSEC_PASSWORD   — 用于首次登录/重新登录
- *   HCNSEC_NEW_API_USER                 — 登录后提取的 new-api-user 值（登录脚本会自动探测）
  *
  * 输出：
  *   - 签到成功 / 已签到 / 失败，并返回相应 exit code
  */
-
 import fetch from 'node-fetch';
 import { chromium } from 'playwright';
 import * as dotenv from 'dotenv';
 
-// 加载 .env（GitHub Actions 中会自动将 secrets 注入为环境变量）
+/* 加载 .env（GitHub Actions 中会自动将 secrets 注入为环境变量） */
 dotenv.config();
 
-// ──────────────────────────────────────────────────────────────
-// 1. 配置
-// ──────────────────────────────────────────────────────────────
+/* ────────────────────────────────────────────────────────────── */
+/* 1. 配置 */
+/* ────────────────────────────────────────────────────────────── */
 const HOST = 'api.hcnsec.cn';
 const BASE = `https://${HOST}`;
 const SELF_URL = `${BASE}/api/user/self`;
 const CHECKIN_URL = `${BASE}/api/user/checkin`;
 
-// 必要的 env 检查
+/* 必要的 env 检查 */
 const USERNAME = process.env.HCNSEC_USERNAME;
 const PASSWORD = process.env.HCNSEC_PASSWORD;
-const NEW_API_USER = process.env.HCNSEC_NEW_API_USER; // 可选，如果有则直接用
 
 if (!USERNAME || !PASSWORD) {
   console.error('[FATAL] 缺少 HCNSEC_USERNAME / HCNSEC_PASSWORD 环境变量');
@@ -40,16 +37,15 @@ if (!USERNAME || !PASSWORD) {
   process.exit(1);
 }
 
-// ──────────────────────────────────────────────────────────────
-// 2. 主要逻辑
-// ──────────────────────────────────────────────────────────────
+/* ────────────────────────────────────────────────────────────── */
+/* 2. 主要逻辑 */
+/* ────────────────────────────────────────────────────────────── */
 (async () => {
   console.log('[INFO] HCNSec daily check-in starting...');
 
-  // --- 第一步：尝试恢复已保存的登录态 ---
+  /* --- 第一步：尝试恢复已保存的登录态 --- */
   let authFailed = false;
   let cookies = [];
-  let newApiUserValue = null;
 
   try {
     console.log('[INFO] 尝试恢复已保存的登录态...');
@@ -69,39 +65,6 @@ if (!USERNAME || !PASSWORD) {
       // 获取当前的 cookies
       cookies = await context.cookies();
 
-      // 从 cookies 里找 new-api-user
-      for (const c of cookies) {
-        if (c.name === 'new-api-user' || c.name === 'NEW_API_USER') {
-          newApiUserValue = c.value;
-          break;
-        }
-      }
-
-      // 如果 cookies 里没有，尝试从页面 localStorage 探测
-      if (!newApiUserValue) {
-        try {
-          const lsValue = await page.evaluate(() => {
-            const keys = Object.keys(localStorage);
-            for (const key of keys) {
-              if (key.toLowerCase().includes('new-api-user') || key.toLowerCase().includes('new_api_user')) {
-                return localStorage.getItem(key);
-              }
-            }
-            return null;
-          });
-          if (lsValue) {
-            newApiUserValue = lsValue;
-            console.log('    ✅ 从 localStorage 探测到 new-api-user');
-          }
-        } catch (e) {
-          // 忽略
-        }
-      }
-
-      if (!newApiUserValue) {
-        console.warn('[WARN] 未在 cookies/localStorage 中找到 new-api-user，将尝试从响应头/体中解析');
-      }
-
       // --- 第四步：执行签到 ---
       console.log('[INFO] 使用有效会话进行签到...');
       const checkinResp = await fetch(CHECKIN_URL, {
@@ -112,8 +75,6 @@ if (!USERNAME || !PASSWORD) {
           'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
           'Cookie': cookies.map(c => `${c.name}=${c.value}`).join('; ') || '',
           'Content-Type': 'application/json',
-          // 如果有 new-api-user header 就加上
-          ...(newApiUserValue ? { 'new-api-user': newApiUserValue } : {}),
         },
         body: JSON.stringify({}),
       });
@@ -159,7 +120,7 @@ if (!USERNAME || !PASSWORD) {
     authFailed = true;
   }
 
-  // --- 第二步：如果已保存的态失效，使用账号密码自动登录 ---
+  /* --- 第二步：如果已保存的态失效，使用账号密码自动登录 --- */
   if (authFailed) {
     console.log('[INFO] 开始使用账号密码自动登录...');
 
@@ -411,51 +372,8 @@ if (!USERNAME || !PASSWORD) {
     await context.storageState({ path: '.playwright/storageState.json' });
     console.log('    ✅ 状态已保存到 .playwright/storageState.json');
 
-    // 获取登录后的 cookies
+    // 8. 获取登录后的 cookies
     cookies = await context.cookies();
-
-    // 尝试从 cookies 中提取 new-api-user
-    for (const c of cookies) {
-      if (c.name === 'new-api-user' || c.name === 'NEW_API_USER') {
-        newApiUserValue = c.value;
-        break;
-      }
-    }
-
-    // 如果 cookies 里没有，尝试从页面 localStorage 或响应体中探测
-    if (!newApiUserValue) {
-      try {
-        const lsValue = await page.evaluate(() => {
-          // 尝试查找 localStorage 中的 new-api-user 或类似键
-          const keys = Object.keys(localStorage);
-          for (const key of keys) {
-            if (key.toLowerCase().includes('new-api-user') || key.toLowerCase().includes('new_api_user')) {
-              return localStorage.getItem(key);
-            }
-          }
-          // 如果没有，返回 null 让下面的逻辑继续
-          return null;
-        });
-        if (lsValue) {
-          newApiUserValue = lsValue;
-          console.log('    ✅ 从 localStorage 探测到 new-api-user');
-        } else {
-          // 备用：尝试从页面上下文中查找 meta 标签或脚本变量
-          const metaMatch = await page.content().match(/["']new-api-user["']\s*[:=]\s*["']([^"']+)["']/);
-          if (metaMatch) {
-            newApiUserValue = metaMatch[1];
-            console.log('    ✅ 从页面内容探测到 new-api-user');
-          } else {
-            console.log('    ⚠️ 在页面中未探测到 new-api-user，将尝试使用已保存的状态或手动提供');
-          }
-        }
-      } catch (e) {
-        console.warn('    ⚠️ 探测 new-api-user 时出错: ', e.message);
-      }
-    }
-    if (!newApiUserValue) {
-      console.warn('    ⚠️ 未自动探测到 new-api-user，将尝试使用已保存的状态或手动提供');
-    }
 
     // --- 第三步：使用新获取的 cookies 进行签到 ---
     console.log('[5/5] 使用新登录会话进行签到...');
@@ -467,7 +385,6 @@ if (!USERNAME || !PASSWORD) {
         'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
         'Cookie': cookies.map(c => `${c.name}=${c.value}`).join('; ') || '',
         'Content-Type': 'application/json',
-        ...(newApiUserValue ? { 'new-api-user': newApiUserValue } : {}),
       },
       body: JSON.stringify({}),
     });
