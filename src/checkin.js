@@ -366,7 +366,7 @@ if (!USERNAME || !PASSWORD) {
   // 使用 page.evaluate 发送请求，这样可以确保浏览器上下文中的所有 Cookie（包括 HttpOnly）都被自动携带
   console.log('[3/5] 使用新登录会话进行签到...');
   console.log('[3.1/5] 发送签到请求...');
-  const checkinResponse = await page.evaluate(async (url) => {
+  const checkinText = await page.evaluate(async (url) => {
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -377,10 +377,9 @@ if (!USERNAME || !PASSWORD) {
       body: JSON.stringify({}),
       credentials: 'include' // 确保发送 Cookie
     });
-    return response;
+    return await response.text();
   }, CHECKIN_URL);
 
-  const checkinText = await checkinResponse.text();
   let checkinData;
   try { checkinData = JSON.parse(checkinText); } catch { checkinData = { raw: checkinText }; }
 
