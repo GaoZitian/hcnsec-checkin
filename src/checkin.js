@@ -373,15 +373,18 @@ if (!USERNAME || !PASSWORD) {
     
     // 关键步骤：在保存 storageState 前，访问关键路径确保所有 cookies 都被捕获
     // new_api_refresh 通常在 /api/user/auth 设置，new_api_has_session 在根路径
-    console.log('[DEBUG] Navigating to /api/user/auth to capture all cookies...');
-    await page.goto(`${BASE}/api/user/auth`, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
-    await page.waitForTimeout(1000);
+    // 但有时需要多次尝试或更长的等待时间
+    console.log('[DEBUG] Attempting to capture all cookies before storageState save...');
     
-    console.log('[DEBUG] Navigating to / to capture has_session cookie...');
-    await page.goto(BASE, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
-    await page.waitForTimeout(1000);
+    // 尝试多次访问以确保 cookies 被设置
+    for (let i = 0; i < 3; i++) {
+      await page.goto(`${BASE}/api/user/auth`, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(500);
+      await page.goto(BASE, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(500);
+    }
     
-    // 现在保存 storageState - 应该包含所有 3 个 cookie
+    // 保存 storageState - 应该包含所有 3 个 cookie
     await context.storageState({ path: '.playwright/storageState.json' });
     console.log('    ✅ 状态已保存到 .playwright/storageState.json');
 
