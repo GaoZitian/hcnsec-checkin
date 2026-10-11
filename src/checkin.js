@@ -290,6 +290,28 @@ if (!USERNAME || !PASSWORD) {
       process.exit(1);
     }
 
+    // 【关键步骤】在保存签到前，显式访问 /api/user/auth 和 / 两个路径
+    // 确保浏览器上下文捕获到 new_api_refresh (path=/api/user/auth) 和 new_api_has_session (path=/)
+    // 这两个 Cookie 之前被 storageState 自动捕获失败，是签到 AUTH_UNAUTHORIZED 的根本原因
+    console.log('[2.5/5] 强制访问 Cookie 关键路径以捕获所有认证 Cookie...');
+    try {
+      // 访问 /api/user/auth 以设置 new_api_refresh Cookie
+      await page.goto(`${BASE}/api/user/auth`, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(500);
+
+      // 访问根路径 / 以设置 new_api_has_session Cookie
+      await page.goto(BASE, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(500);
+
+      // 再次访问 /api/user/self 确认登录状态稳定
+      await page.goto(SELF_URL, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(500);
+
+      console.log('[DEBUG] Cookie 捕获后检查上下文 cookies...');
+    } catch (e) {
+      console.warn('[WARN] 访问 Cookie 路径时出错（不影响流程）: ', e.message);
+    }
+
     // --- 第二步：使用新登录会话进行签到 ---
     console.log('[2/5] 使用新登录会话进行签到...');
 
