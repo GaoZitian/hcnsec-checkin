@@ -412,7 +412,7 @@ if (!USERNAME || !PASSWORD) {
     await browser.close();
     process.exit(1);
   }
-}).catch(err => {
+})().catch(err => {
   console.error('[ERROR] 脚本异常:', err);
   process.exit(1);
 });
