@@ -276,6 +276,13 @@ if (!USERNAME || !PASSWORD) {
     }, { timeout: 15000 });
     console.log('    ✅ 登录成功（/api/user/self 返回 200）');
     loginSuccess = true;
+    // --- 新增：访问 /api/user/auth 以激活 Cookie path 范围 ---
+    // new_api_refresh 的 path=/api/user/auth，通过访问该路径让浏览器将其范围扩大到 /api/user/checkin
+    try {
+      await page.goto('https://api.hcnsec.cn/api/user/auth', { waitUntil: 'networkidle0', timeout: 10000 })
+    } catch (e) {
+      // 忽略访问失败，仅作为 Cookie 激活的尝试
+    }
   } catch (e) {
       // 方式 2：检查是否跳转离开登录页
     try {
