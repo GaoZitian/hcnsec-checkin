@@ -373,6 +373,11 @@ if (!USERNAME || !PASSWORD) {
     await context.storageState({ path: '.playwright/storageState.json' });
     console.log('    ✅ 状态已保存到 .playwright/storageState.json');
 
+    // 读取并显示storageState内容用于调试
+    const storageState = JSON.parse(fs.readFileSync('.playwright/storageState.json', 'utf8'));
+    console.log('[DEBUG] storageState contents:');
+    console.log(JSON.stringify(storageState, null, 2));
+
     // 8. 获取登录后的 cookies (打印详细信息)
     cookies = await context.cookies();
     console.log('[DEBUG] Retrieved cookies after login:');
