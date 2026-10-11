@@ -393,7 +393,7 @@ if (!USERNAME || !PASSWORD) {
      message.includes('已经签到') ||
      message.toLowerCase().includes('already'));
 
-  if (checkinResponse.ok() && success) {
+  if (success) {
     const quota = checkinData?.data?.quota_awarded;
     const date = checkinData?.data?.checkin_date;
     const extra = quota !== undefined ? ` | 获得额度: ${quota}` : '';
@@ -401,14 +401,12 @@ if (!USERNAME || !PASSWORD) {
     console.log(`[SUCCESS] 签到成功${dateStr}${extra}`);
     await browser.close();
     process.exit(0);
-  } else if (checkinResponse.ok() && isAlready) {
+  } else if (isAlready) {
     console.log(`[INFO] 已签到: ${message || '今日已签到'}`);
     await browser.close();
     process.exit(0);
   } else {
-    const httpStatus = checkinResponse.status();
-    const errorMessage = message || checkinText || `HTTP ${httpStatus}`;
-    console.error(`[FAIL] 签到失败: ${errorMessage}`);
+    console.error(`[FAIL] 签到失败: ${message || checkinText || '未知错误'}`);
     await browser.close();
     process.exit(1);
   }
