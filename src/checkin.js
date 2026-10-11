@@ -364,15 +364,35 @@ if (!USERNAME || !PASSWORD) {
       process.exit(1);
     }
 
-    // 7. 保存 storageState 供下次使用
+        // 7. 保存 storageState 供下次使用
     console.log('[4/5] 保存登录状态，供下次使用...');
     const fs = await import('fs');
     if (!fs.existsSync('.playwright')) {
       fs.mkdirSync('.playwright', { recursive: true });
     }
     
-    // 确保登录状态稳定，给 Cookie 设置时间完成
-    await page.waitForTimeout(3000);
+    // 关键步骤：在保存 storageState 之前，确保 Cookie 设置完成
+    // 记录登录后的初始 Cookie
+    let cookiesAfterLogin = await context.cookies();
+    console.log('[DEBUG] Cookies after login:', cookiesAfterLogin.map(c => `${c.name}=${c.value}`).join('; '));
+    
+    // 访问 /api/user/auth 设置 new_api_refresh cookie
+    await page.goto(`${BASE}/api/user/auth`, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(500);
+    let cookiesAfterAuth = await context.cookies();
+    console.log('[DEBUG] Cookies after visiting /api/user/auth:', cookiesAfterAuth.map(c => `${c.name}=${c.value}`).join('; '));
+    
+    // 访问根路径设置 new_api_has_session cookie
+    await page.goto(BASE, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(500);
+    let cookiesAfterBase = await context.cookies();
+    console.log('[DEBUG] Cookies after visiting BASE:', cookiesAfterBase.map(c => `${c.name}=${c.value}`).join('; '));
+    
+    // 再次访问登录状态验证确保一切正常
+    await page.goto(SELF_URL, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(500);
+    let cookiesAfterSelf = await context.cookies();
+    console.log('[DEBUG] Cookies after visiting SELF_URL:', cookiesAfterSelf.map(c => `${c.name}=${c.value}`).join('; '));
     
     // 现在保存 storageState - 应该包含所有必需的 cookie
     await context.storageState({ path: '.playwright/storageState.json' });
