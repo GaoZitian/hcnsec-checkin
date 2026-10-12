@@ -57,18 +57,24 @@ if (!USERNAME || !PASSWORD) {
   page.setDefaultTimeout(60000);
   page.setDefaultNavigationTimeout(60000);
 
-  // --- 关键：全局响应监听器捕获登录响应的 Set-Cookie 头 和 响应体(access_token) ---
+  // --- 关键：全局请求/响应监听器，捕获所有 /api/ 调用（定位真实的 token 交换路径）---
   let capturedLoginCookies = '';
   let capturedLoginBody = null;
+  page.on('request', req => {
+    const u = req.url();
+    if (u.includes('/api/') && req.method() === 'POST') {
+      console.log('[DEBUG API CALL]', req.method(), u);
+    }
+  });
   page.on('response', async response => {
     const url = response.url();
     const method = response.request().method();
-    // 登录 API 可能是 /login 或 /api/user/login（SPA 调的是后者）
     const isLoginPost = method === 'POST' && (url.includes('/api/user/login') || url.includes('/login'));
     if (isLoginPost) {
       const setCookie = response.headers()['set-cookie'];
       if (setCookie) {
         capturedLoginCookies = setCookie.map(c => c.split(';')[0].trim()).join('; ');
+        console.log('[DEBUG LOGIN RESPONSE] Set-Cookie:', setCookie);
       }
       try {
         const body = await response.json();
@@ -78,10 +84,10 @@ if (!USERNAME || !PASSWORD) {
       } catch (e) {
         console.log('[DEBUG LOGIN RESPONSE] 无法解析 body:', e.message);
       }
-    } else if (url.includes('api.hcnsec.cn')) {
+    } else if (url.includes('/api/') && method === 'POST') {
       const setCookie = response.headers()['set-cookie'];
       if (setCookie) {
-        console.log(`[DEBUG RESPONSE] ${url} -> Set-Cookie:`, setCookie);
+        console.log(`[DEBUG API POST+Cookie] ${url} -> ${setCookie}`);
       }
     }
   });
