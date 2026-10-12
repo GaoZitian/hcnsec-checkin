@@ -63,19 +63,18 @@ if (!USERNAME || !PASSWORD) {
   page.on('response', async response => {
     const url = response.url();
     const method = response.request().method();
-    if (url.includes('/login') && method === 'POST') {
-      // 登录 POST 响应：捕获 Set-Cookie 与响应体（NewAPI 的 access_token 在响应体 data 中）
+    // 登录 API 可能是 /login 或 /api/user/login（SPA 调的是后者）
+    const isLoginPost = method === 'POST' && (url.includes('/api/user/login') || url.includes('/login'));
+    if (isLoginPost) {
       const setCookie = response.headers()['set-cookie'];
       if (setCookie) {
-        console.log('[DEBUG LOGIN RESPONSE] Set-Cookie:', setCookie);
         capturedLoginCookies = setCookie.map(c => c.split(';')[0].trim()).join('; ');
       }
       try {
         const body = await response.json();
         capturedLoginBody = body;
-        // 打印 data 层所有 key（不打印 token 全文，避免凭证泄露）
         const dataKeys = body?.data ? Object.keys(body.data) : [];
-        console.log('[DEBUG LOGIN RESPONSE] body.success=', body?.success, ' data keys=', JSON.stringify(dataKeys));
+        console.log('[DEBUG LOGIN RESPONSE]', url, 'success=', body?.success, ' topKeys=', Object.keys(body||{}), ' dataKeys=', JSON.stringify(dataKeys));
       } catch (e) {
         console.log('[DEBUG LOGIN RESPONSE] 无法解析 body:', e.message);
       }
@@ -448,11 +447,17 @@ if (!USERNAME || !PASSWORD) {
   console.log('[3.1/5] 发送签到请求...');
 
   // 从 localStorage 提取 access_token（登录成功后 SPA 会写入）
-  // NewAPI 默认 key 是 access_token；同时兼容 accessToken / token
+  // 先 dump 所有 key 便于定位真实 key，再从常见 key 取值
+  const lsKeys = await page.evaluate(() => Object.keys(localStorage));
+  console.log('[DEBUG] localStorage keys:', JSON.stringify(lsKeys));
   let accessToken = await page.evaluate(() => {
-    for (const k of ['access_token', 'accessToken', 'token']) {
+    for (const k of ['access_token', 'accessToken', 'token', 'access_token']) {
       const v = localStorage.getItem(k);
       if (v) return v;
+    }
+    // 兜底：任何 value 含 "Bearer"/jwt 结构 (eyJ 开头) 的 key
+    for (const [k, v] of Object.entries(localStorage)) {
+      if (typeof v === 'string' && (v.startsWith('eyJ') || /access[_-]?token/i.test(k) || /bearer/i.test(k))) return v;
     }
     return '';
   });
