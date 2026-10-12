@@ -1,34 +1,34 @@
 /**
  * HCNSec 每日签到脚本
- * 核心策略：始终使用 GitHub Secrets 中的账号密码进行完整登录，
- * 确保每日签到都有有效的认证 Cookie，不依赖不完整的 storageState 缓存。
  *
- * 环境变量（GitHub Secrets 或本地 .env）：
- *   HCNSEC_USERNAME / HCNSEC_PASSWORD   — 用于自动登录
+ * 鉴权机制（已实测确认）：
+ *   - 站点是 NewAPI（one-api 分支），签到接口 /api/user/checkin 用
+ *     Authorization: Bearer <access_token> 鉴权，不认 Cookie。
+ *   - access_token 不在 localStorage、也不在 cookie 里，
+ *     它只在 /api/user/login 或 /api/user/auth/refresh 的**响应体**里。
+ *   - 之前版本点按钮走 UI 登录，但按钮匹配到兜底选择器、从未真正发出
+ *     POST /api/user/login，导致全程空会话，签到必然 AUTH_UNAUTHORIZED。
  *
- * 签到流程：
- *   1. 用 HCNSEC_USERNAME/HCNSEC_PASSWORD 打开登录页并填入表单
- *   2. 勾选同意条款，处理 Cloudflare Turnstile 验证
- *   3. 点击登录按钮，等待登录成功（/api/user/self 返回 200 或页面跳转）
- *   4. 使用 Playwright page.request.post 自动携带所有有效 Cookie 进行签到
- *   5. 输出签到结果：成功 / 已签到 / 失败
+ * 新策略：不再点按钮，直接调用登录 API。
+ *   1. 打开站点首页（通过 Cloudflare、拿到 cf cookies）
+ *   2. context.request.post(/api/user/login) 直接登录 → 拿 access_token
+ *   3. 若登录响应没带 token，再 post(/api/user/auth/refresh) 换 token
+ *      （登录时下发的 new_api_refresh cookie 已由 context 自动携带）
+ *   4. context.request.post(/api/user/checkin) + Authorization: Bearer <token>
  *
- * 输出：
- *   - 签到成功 / 已签到 / 失败，并返回相应 exit code
+ * 环境变量：HCNSEC_USERNAME / HCNSEC_PASSWORD
  */
 import { chromium } from 'playwright';
 import * as dotenv from 'dotenv';
 
-/* 加载 .env（GitHub Actions 中会自动将 secrets 注入为环境变量） */
 dotenv.config();
 
-/* ────────────────────────────────────────────────────────────── */
-/* 1. 配置 */
-/* ────────────────────────────────────────────────────────────── */
 const HOST = 'api.hcnsec.cn';
 const BASE = `https://${HOST}`;
-const SELF_URL = `${BASE}/api/user/self`;
+const LOGIN_URL = `${BASE}/api/user/login`;
+const REFRESH_URL = `${BASE}/api/user/auth/refresh`;
 const CHECKIN_URL = `${BASE}/api/user/checkin`;
+const SELF_URL = `${BASE}/api/user/self`;
 
 const USERNAME = process.env.HCNSEC_USERNAME;
 const PASSWORD = process.env.HCNSEC_PASSWORD;
@@ -39,501 +39,162 @@ if (!USERNAME || !PASSWORD) {
   process.exit(1);
 }
 
-/* ────────────────────────────────────────────────────────────── */
-/* 2. 主要逻辑 – 始终使用账号密码登录 */
-/* ────────────────────────────────────────────────────────────── */
-(async () => {
-  try {
-    console.log('[INFO] HCNSec daily check-in starting...');
+/* 从响应体里提取 token（兼容多种 key 名） */
+function extractToken(body) {
+  if (!body) return '';
+  const d = body.data || {};
+  return (
+    d.access_token || d.accessToken || d.token ||
+    body.access_token || body.accessToken || body.token || ''
+  );
+}
 
-  /* --- 第一步：使用账号密码自动登录 --- */
-  console.log('[1/5] 使用账号密码自动登录...');
+async function checkin() {
+  console.log('[INFO] HCNSec daily check-in starting...');
 
   const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext();
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  });
   const page = await context.newPage();
-
-  // 设置更长的默认超时（站点可能有 Cloudflare 延迟）
   page.setDefaultTimeout(60000);
   page.setDefaultNavigationTimeout(60000);
 
-  // --- 全局监听器：完整记录登录链路（定位 login 端点与 token 来源）---
-  let capturedLoginCookies = '';
-  let capturedLoginBody = null;
-  let capturedRefreshToken = '';
-  page.on('request', req => {
-    const u = req.url();
-    if (u.includes('/api/')) {
-      console.log('[DEBUG REQ]', req.method(), u.replace('https://api.hcnsec.cn', ''));
-    }
-  });
-  page.on('response', async response => {
-    const url = response.url();
-    const method = response.request().method();
-    if (!url.includes('/api/')) return;
-    const path = url.replace('https://api.hcnsec.cn', '');
-    const setCookie = response.headers()['set-cookie'];
-    if (setCookie) {
-      console.log(`[DEBUG SETCOOKIE] ${method} ${path} ->`, setCookie);
-      capturedLoginCookies = setCookie.map(c => c.split(';')[0].trim()).join('; ');
-    }
-    if (method === 'POST' && (path.includes('/login') || path.includes('/auth/refresh') || path.includes('/user/login'))) {
+  try {
+    // ── 第一步：打开首页，通过 Cloudflare 拿到 cf cookies ──
+    console.log('[1/5] 打开站点首页（通过 Cloudflare）...');
+    let homeOk = false;
+    for (let attempt = 1; attempt <= 2; attempt++) {
       try {
-        const body = await response.json();
-        const top = Object.keys(body || {});
-        const dkeys = body?.data ? Object.keys(body.data) : [];
-        console.log(`[DEBUG POST BODY] ${method} ${path} status=${response.status()} success=${body?.success} topKeys=${JSON.stringify(top)} dataKeys=${JSON.stringify(dkeys)} code=${body?.code || body?.data?.code || ''}`);
-        if (path.includes('/auth/refresh') || path.includes('/login')) {
-          const d = body?.data;
-          const tok = d?.access_token || d?.token || d?.accessToken || body?.access_token || '';
-          if (tok) { capturedLoginBody = body; capturedRefreshToken = tok; console.log('[DEBUG] token FOUND from', path, 'len=' + tok.length); }
-        }
+        await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 90000 });
+        await page.waitForTimeout(2000);
+        homeOk = true;
+        console.log(`    ✅ 首页加载成功 (尝试 ${attempt}/2)`);
+        break;
       } catch (e) {
-        console.log(`[DEBUG POST BODY] ${method} ${path} 解析失败:`, e.message);
+        console.warn(`[WARN] 首页加载失败 (尝试 ${attempt}/2): ${e.message}`);
+        await page.waitForTimeout(3000);
       }
     }
-  });
-
-  // 1. 打开登录页（带重试，防止网络抖动）
-  console.log('[1.1/5] 打开登录页...');
-  let loginPageLoaded = false;
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      await page.goto('https://api.hcnsec.cn/login', { waitUntil: 'domcontentloaded', timeout: 120000 });
-      loginPageLoaded = true;
-      console.log(`    ✅ 登录页加载成功 (尝试 ${attempt}/2)`);
-      break;
-    } catch (e) {
-      console.warn(`[WARN] 登录页加载失败 (尝试 ${attempt}/2):`, e.message);
-      if (attempt < 2) {
-        console.log('    等待 5 秒后重试...');
-        await page.waitForTimeout(5000);
-      }
-    }
-  }
-  if (!loginPageLoaded) {
-    console.error('[ERROR] 登录页加载失败，已达最大重试次数');
-    await browser.close();
-    process.exit(1);
-  }
-
-  // 等待页面 JS 渲染稳定
-  await page.waitForTimeout(3000);
-
-  // 2. 填入用户名 - 使用通用、稳定的选择器（不依赖 ref）
-  console.log('[1.2/5] 填入用户名...');
-  let usernameFilled = false;
-  const usernameSelectors = [
-    'input[placeholder=\"用户名或电子邮件\"]',
-    'input[placeholder*=\"用户名\"]',
-    'input[name=\"username\"]',
-    'input[type=\"text\"]:not([type=\"hidden\"])',
-    'input:not([type=\"password\"]):not([type=\"hidden\"]):not([type=\"submit\"]):not([type=\"button\"])',
-  ];
-
-  for (const selector of usernameSelectors) {
-    try {
-      await page.waitForSelector(selector, { state: 'visible', timeout: 8000 });
-      await page.fill(selector, USERNAME, { timeout: 5000 });
-      console.log(`    ✅ 用户名已填入 (${selector})`);
-      usernameFilled = true;
-      break;
-    } catch (e) {
-      // 尝试下一个选择器
-    }
-  }
-
-  if (!usernameFilled) {
-    console.error('    ❌ 无法填入用户名：所有选择器均失败');
-    await browser.close();
-    process.exit(1);
-  }
-
-  // 3. 填入密码
-  console.log('[1.3/5] 填入密码...');
-  let passwordFilled = false;
-  const passwordSelectors = [
-    'input[placeholder=\"密码\"]',
-    'input[type=\"password\"]',
-    'input[name=\"password\"]',
-  ];
-
-  for (const selector of passwordSelectors) {
-    try {
-      await page.waitForSelector(selector, { state: 'visible', timeout: 8000 });
-      await page.fill(selector, PASSWORD, { timeout: 5000 });
-      console.log(`    ✅ 密码已填入 (${selector})`);
-      passwordFilled = true;
-      break;
-    } catch (e) {
-      // 尝试下一个选择器
-    }
-  }
-
-  if (!passwordFilled) {
-    console.error('    ❌ 无法填入密码：所有选择器均失败');
-    await browser.close();
-    process.exit(1);
-  }
-
-  // 4. 勾选同意条款 - 使用多层级备选选择器
-  console.log('[1.4/5] 勾选同意条款...');
-  let checkboxChecked = false;
-
-  // 方案 1：role 选择器（最语义化、最稳定）
-  try {
-    const checkbox = page.getByRole('checkbox', { name: /我已阅读并同意/ });
-    await checkbox.waitFor({ state: 'visible', timeout: 15000 });
-    await checkbox.check({ force: true });
-    console.log('    ✅ 已勾选同意条款 (role: checkbox + name)');
-    checkboxChecked = true;
-  } catch (e) {
-      // 方案 2：label 文本关联的 checkbox
-    try {
-      const checkbox = page.locator('label:has-text(\"我已阅读并同意\") >> input[type=\"checkbox\"]');
-      await checkbox.waitFor({ state: 'visible', timeout: 10000 });
-      await checkbox.check({ force: true });
-      console.log('    ✅ 已勾选同意条款 (label 关联)');
-      checkboxChecked = true;
-    } catch (e2) {
-          // 方案 3：页面上唯一的 checkbox（通常就是同意条款）
-      try {
-        const checkbox = page.locator('input[type=\"checkbox\"]').first();
-        await checkbox.waitFor({ state: 'visible', timeout: 10000 });
-        await checkbox.check({ force: true });
-        console.log('    ✅ 已勾选同意条款 (首个 checkbox)');
-        checkboxChecked = true;
-      } catch (e3) {
-            // 方案 4：通过 evaluate 直接操作 DOM（最后手段）
-        try {
-          await page.evaluate(() => {
-            const checkboxes = document.querySelectorAll('input[type=\"checkbox\"]');
-            for (const cb of checkboxes) {
-              if (!cb.checked) {
-                cb.click();
-                return true;
-              }
-            }
-            return false;
-          });
-          console.log('    ✅ 已勾选同意条款 (evaluate 强制点击)');
-          checkboxChecked = true;
-        } catch (e4) {
-          console.warn('    ⚠️ 勾选同意条款失败，继续尝试登录:', e4.message);
-        }
-      }
-    }
-  }
-
-  // 给勾选后的 UI 状态更新一点时间
-  await page.waitForTimeout(1000);
-
-  // 5. 处理 Cloudflare 验证（如果出现）
-  console.log('[1.5/5] 检查 Cloudflare 验证...');
-  try {
-      // 检查是否存在 Cloudflare iframe（常见 title）
-    const cfIframe = page.frameLocator('iframe[title*=\"Cloudflare\"], iframe[title*=\"challenge\"], iframe[title*=\"验证\"]');
-      // 尝试查找验证元素是否可见
-    const cfVisible = await cfIframe.locator('input[type=\"checkbox\"], button:has-text(\"验证\"), button:has-text(\"Verify\")').first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => null);
-    if (cfVisible) {
-      console.log('    检测到 Cloudflare 验证，尝试处理...');
-
-          // 尝试在 iframe 中点击验证按钮/复选框
-      await cfIframe.locator('input[type=\"checkbox\"]').first().check({ force: true, timeout: 5000 }).catch(() => {});
-      await cfIframe.locator('button:has-text(\"验证\"), button:has-text(\"Verify\"), button:has-text(\"我是人类\")').first().click({ force: true, timeout: 5000 }).catch(() => {});
-
-          // 等待验证完成
-      await page.waitForTimeout(5000);
-      console.log('    ✅ Cloudflare 验证处理尝试完成');
-    } else {
-      console.log('    未检测到 Cloudflare 验证，或已通过');
-    }
-  } catch (e) {
-    console.log('    Cloudflare 验证检查出错:', e.message, '- 继续流程');
-  }
-
-  // 6. 提交表单 - 查找并点击登录按钮
-  console.log('[1.6/5] 查找并点击登录按钮...');
-  let loginClicked = false;
-
-  const loginButtonSelectors = [
-    'button[type=\"submit\"]',
-    'button:has-text(\"登录\")',
-    'button:has-text(\"登 录\")',
-    'button:has-text(\"登  录\")',
-    'button:has-text(\"Sign in\")',
-    'button:has-text(\"Sign In\")',
-    'input[type=\"submit\"]',
-    'button:not([disabled]):visible',
-    'button', // 最后兜底：页面上第一个可见的 button
-  ];
-
-  for (const selector of loginButtonSelectors) {
-    try {
-      const btn = page.locator(selector).first();
-      await btn.waitFor({ state: 'visible', timeout: 8000 });
-
-          // 检查是否禁用
-      const isDisabled = await btn.isDisabled();
-      if (isDisabled) {
-        console.log(`    ⏳ 按钮 ${selector} 当前禁用，等待启用...`);
-        await page.waitForFunction((sel) => {
-          const el = document.querySelector(sel);
-          return el && !el.disabled;
-        }, selector, { timeout: 30000 });
-      }
-
-      await btn.click({ force: true, timeout: 5000 });
-      console.log(`    ✅ 登录按钮已点击 (${selector})`);
-      loginClicked = true;
-      break;
-    } catch (e) {
-      // 尝试下一个选择器
-    }
-  }
-
-  if (!loginClicked) {
-    // 最后尝试：按 Enter 键提交表单
-    try {
-      await page.keyboard.press('Enter');
-      console.log('    ✅ 已按 Enter 键提交表单');
-      loginClicked = true;
-    } catch (e) {
-      console.error('    ❌ 无法找到或点击登录按钮，且 Enter 提交失败');
-      await browser.close();
+    if (!homeOk) {
+      console.error('    ❌ 首页加载失败');
       process.exit(1);
     }
-  }
 
-  // --- 关键：拦截登录响应以直接捕获 Set-Cookie headers ---
-  let loginResponseCookies = [];
-  // 监听所有响应，捕获登录 POST 的 Set-Cookie
-  const responseHandler = async (resp) => {
-    const url = resp.url();
-    if (url.includes('/login') && resp.request().method() === 'POST') {
-      const setCookie = resp.headers()['set-cookie'];
-      if (setCookie) {
-        console.log('[DEBUG LOGIN RESPONSE] Set-Cookie headers captured:', setCookie);
-        loginResponseCookies = setCookie;
-      }
-    }
-  };
-  page.on('response', responseHandler);
-
-  // 7. 等待登录成功（等待 /api/user/self 返回 200 或页面跳转）
-  console.log('[1.7/5] 等待登录验证...');
-  let loginSuccess = false;
-
-  try {
-      // 方式 1：监听 /api/user/self 请求成功
-    await page.waitForResponse(async (resp) => {
-      return resp.url().includes('/api/user/self') && resp.status() === 200;
-    }, { timeout: 15000 });
-    console.log('    ✅ 登录成功（/api/user/self 返回 200）');
-    loginSuccess = true;
-    // --- 关键：完整的 Cookie 捕获序列 ---
-    // 步骤1：等待页面静态，确保所有 Set-Cookie 已处理
-    await page.waitForTimeout(3000);
-    
-    // 步骤2：访问根路径，触发可能的 Cookie 重新评估
-    try {
-      await page.goto('https://api.hcnsec.cn/', { waitUntil: 'networkidle0', timeout: 15000 });
-    } catch (e) {
-      // 忽略根路径访问失败
-    }
-    
-    // 步骤3：确认登录有效性
-    try {
-      await page.goto('https://api.hcnsec.cn/api/user/self', { waitUntil: 'networkidle0', timeout: 15000 });
-    } catch (e) {
-      // 忽略验证失败
-    }
-    
-    // 步骤4：访问 /api/user/auth 激活 HttpOnly cookie
-    try {
-      await page.goto('https://api.hcnsec.cn/api/user/auth', { waitUntil: 'networkidle0', timeout: 15000 });
-    } catch (e) {
-      // 忽略 /api/user/auth 访问失败
-    }
-    // --- 新增：访问 /api/user/auth 以激活 Cookie path 范围 ---
-    // new_api_refresh 的 path=/api/user/auth，通过访问该路径让浏览器将其范围扩大到 /api/user/checkin
-    try {
-      await page.goto('https://api.hcnsec.cn/api/user/auth', { waitUntil: 'networkidle0', timeout: 10000 })
-    } catch (e) {
-      // 忽略访问失败，仅作为 Cookie 激活的尝试
-    }
-  } catch (e) {
-      // 方式 2：检查是否跳转离开登录页
-    try {
-      await page.waitForURL((url) => !url.toString().includes('/login'), { timeout: 10000 });
-      console.log('    ✅ 登录成功（页面已跳转离开登录页）');
-      loginSuccess = true;
-    } catch (e2) {
-      // 方式 3：直接请求 /api/user/self 验证
-      try {
-        const testResp = await page.goto(SELF_URL, { waitUntil: 'networkidle', timeout: 10000 });
-        if (testResp && testResp.status() === 200) {
-          console.log('    ✅ 登录成功（直接访问 /api/user/self 返回 200）');
-          loginSuccess = true;
-        }
-      } catch (e3) {
-        console.error('    ❌ 登录失败，可能验证码挑战或账号密码错误');
-        await browser.close();
-        process.exit(1);
-      }
-    }
-  }
-  if (!loginSuccess) {
-    console.error('    ❌ 未能验证登录成功');
-    await browser.close();
-    process.exit(1);
-  }
-
-  // --- 第二步：确保所有认证 Cookie 已存入浏览器上下文 ---
-  // 登录后，访问设置关键 Cookie 的路径，以确保它们被浏览器上下文捕获。
-  // 即使是 HttpOnly Cookie，也会被 Playwright 的 request 上下文自动携带。
-  console.log('[2.5/5] 访问关键路径以捕获所有认证 Cookie...');
-  try {
-    // 访问 /api/user/auth 以获取 new_api_refresh (path=/api/user/auth, HttpOnly)
-    console.log('[DEBUG] Visiting /api/user/auth');
-    const authResponse = await page.goto(`${BASE}/api/user/auth`, { waitUntil: 'networkidle', timeout: 10000 });
-    if (authResponse) {
-      const headers = authResponse.headers();
-      console.log(`[DEBUG] /api/user/auth response status:`, authResponse.status());
-      // 关键：记录 Set-Cookie headers
-      const setCookie = headers['set-cookie'];
-      if (setCookie) {
-        console.log('[DEBUG] /api/user/auth Set-Cookie headers:', setCookie);
-      } else {
-        console.log('[DEBUG] /api/user/auth no Set-Cookie headers found');
-      }
-    }
-    await page.waitForTimeout(1000);
-    console.log('[DEBUG] Cookies after visiting /api/user/auth:', await page.context().cookies());
-
-    // 访问 首页 / 以获取 new_api_has_session (path=/)
-    console.log('[DEBUG] Visiting /');
-    const rootResponse = await page.goto(`${BASE}/`, { waitUntil: 'networkidle', timeout: 10000 });
-    if (rootResponse) {
-      const headers = rootResponse.headers();
-      console.log(`[DEBUG] / response status:`, rootResponse.status());
-      // 关键：记录 Set-Cookie headers
-      const setCookie = headers['set-cookie'];
-      if (setCookie) {
-        console.log('[DEBUG] / Set-Cookie headers:', setCookie);
-      } else {
-        console.log('[DEBUG] / no Set-Cookie headers found');
-      }
-    }
-    await page.waitForTimeout(1000);
-    console.log('[DEBUG] Cookies after visiting /:', await page.context().cookies());
-
-    console.log('    ✅ 已访问 /api/user/auth 和 /');
-  } catch (e) {
-    console.warn('    ⚠️ 访问关键路径时出错，但继续:', e.message);
-  }
-
-  // 可选：调试查看页面可访问的 Cookie（包括 HttpOnly 和非 HttpOnly）
-  const allCookies = await page.context().cookies();
-  console.log('[DEBUG] All page cookies count:', allCookies.length);
-  for (const cookie of allCookies) {
-    console.log(`    Cookie: ${cookie.name}=${cookie.value} (domain: ${cookie.domain}, path: ${cookie.path}, httpOnly: ${cookie.httpOnly}, secure: ${cookie.secure})`);
-  }
-
-  // 构建包含所有 Cookie 的字符串（包括 HttpOnly）
-  let cookieString = '';
-  for (const cookie of allCookies) {
-    cookieString += `${cookie.name}=${cookie.value}; `;
-  }
-  cookieString = cookieString.replace(/; $/, '');
-  console.log('[DEBUG] Constructed Cookie string for checkin:', cookieString || '(空)');
-
-    // --- 第三步：使用登录会话的 access_token 进行签到 ---
-  // NewAPI 的 /api/user/checkin 通过 Authorization: Bearer <access_token> 鉴权，
-  // access_token 由登录成功后 SPA 写入 localStorage。仅靠 Cookie 会报 "access token 无效"。
-  console.log('[3/5] 使用登录会话进行签到...');
-  console.log('[3.1/5] 发送签到请求...');
-
-  // 从 localStorage 提取 access_token（登录成功后 SPA 可能写入，但本站实测未写入）
-  const lsKeys = await page.evaluate(() => Object.keys(localStorage));
-  console.log('[DEBUG] localStorage keys:', JSON.stringify(lsKeys));
-  let accessToken = await page.evaluate(() => {
-    for (const k of ['access_token', 'accessToken', 'token']) {
-      const v = localStorage.getItem(k);
-      if (v) return v;
-    }
-    for (const [k, v] of Object.entries(localStorage)) {
-      if (typeof v === 'string' && (v.startsWith('eyJ') || /access[_-]?token/i.test(k))) return v;
-    }
-    return '';
-  });
-  // 关键：本站 SPA 把 token 存在 React 内存里，localStorage 没有。
-  // 真正可用的是 /api/user/auth/refresh 响应体里的 token（已由监听器捕获到 capturedRefreshToken）。
-  if (capturedRefreshToken) {
-    accessToken = capturedRefreshToken;
-    console.log('[DEBUG] access_token 来自 /api/user/auth/refresh 响应体');
-  }
-  // 再兜底：登录/refresh 响应体
-  if (!accessToken && capturedLoginBody) {
-    const d = capturedLoginBody?.data;
-    accessToken = d?.access_token || d?.accessToken || d?.token || (capturedLoginBody?.access_token) || '';
-  }
-  console.log('[DEBUG] access_token for checkin:', accessToken ? accessToken.slice(0, 24) + '... (len=' + accessToken.length + ')' : '(未找到)');
-
-  // 同时保留 Cookie 头作为兜底
-  const manualCookieHeader = capturedLoginCookies || '';
-
-  const checkinText = await page.evaluate(async ({ url, token, cookieHeader }) => {
-    const headers = {
-      'Accept': 'application/json, text/plain, */*',
-      'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
-      'Content-Type': 'application/json',
-    };
-    if (token) {
-      headers['Authorization'] = 'Bearer ' + token;
-    }
-    if (cookieHeader) {
-      headers['Cookie'] = cookieHeader;
-    }
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: headers,
-      body: JSON.stringify({}),
-      credentials: 'include' // 同时发送浏览器 Cookie
+    // ── 第二步：直接调用登录 API（不点按钮）──
+    console.log('[2/5] 调用登录 API...');
+    const loginResp = await context.request.post(LOGIN_URL, {
+      data: { username: USERNAME, password: PASSWORD },
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/plain, */*',
+      },
+      timeout: 60000,
     });
-    return await response.text();
-  }, { url: CHECKIN_URL, token: accessToken, cookieHeader: manualCookieHeader });
+    const loginStatus = loginResp.status();
+    console.log(`    登录响应 status=${loginStatus}`);
+    let loginBody = null;
+    try { loginBody = await loginResp.json(); } catch {}
 
-  let checkinData;
-  try { checkinData = JSON.parse(checkinText); } catch { checkinData = { raw: checkinText }; }
+    const loginCode = loginBody?.code || loginBody?.data?.code || '';
+    console.log(`    success=${loginBody?.success} code=${loginCode} message=${loginBody?.message || ''}`);
 
-  console.log('[INFO] Check-in response:', JSON.stringify(checkinData).slice(0, 200));
+    if (loginStatus !== 200 || loginBody?.success !== true) {
+      console.error(`    ❌ 登录失败 (status=${loginStatus}, code=${loginCode}, message=${loginBody?.message || '无'})`);
+      process.exit(1);
+    }
+    console.log('    ✅ 登录 API 成功');
 
+    // ── 第三步：取 token ──
+    console.log('[3/5] 获取 access_token...');
+    let accessToken = extractToken(loginBody);
 
+    if (!accessToken) {
+      // 登录响应没带 token → 用 new_api_refresh cookie 换（cookie 已由 context 自动携带）
+      console.log('    登录响应未带 token，调用 refresh 端点换取...');
+      try {
+        const refreshResp = await context.request.post(REFRESH_URL, {
+          headers: { 'Accept': 'application/json, text/plain, */*' },
+          timeout: 30000,
+        });
+        const refreshStatus = refreshResp.status();
+        let refreshBody = null;
+        try { refreshBody = await refreshResp.json(); } catch {}
+        const rCode = refreshBody?.code || refreshBody?.data?.code || '';
+        console.log(`    refresh 响应 status=${refreshStatus} success=${refreshBody?.success} code=${rCode}`);
+        accessToken = extractToken(refreshBody);
+        if (refreshBody?.success === true && !accessToken) {
+          console.log('    [DEBUG] refresh success 但未找到 token 字段，响应顶层 keys=', Object.keys(refreshBody || {}));
+        }
+      } catch (e) {
+        console.error(`    ❌ refresh 调用失败: ${e.message}`);
+      }
+    }
 
-      // 处理签到结果
-  const success = checkinData?.success === true;
-  const message = checkinData?.message || '';
-  const isAlready = !success &&
-    (message.includes('今日已签到') ||
-     message.includes('已经签到') ||
-     message.toLowerCase().includes('already'));
+    if (!accessToken) {
+      console.error('    ❌ 未获取到 access_token，无法签到');
+      process.exit(1);
+    }
+    console.log(`    ✅ access_token 已获取 (len=${accessToken.length})`);
 
-  if (success) {
-    const quota = checkinData?.data?.quota_awarded;
-    const date = checkinData?.data?.checkin_date;
-    const extra = quota !== undefined ? ` | 获得额度: ${quota}` : '';
-    const dateStr = date ? ` | 日期: ${date}` : '';
-    console.log(`[SUCCESS] 签到成功${dateStr}${extra}`);
-    await browser.close();
-    process.exit(0);
-  } else if (isAlready) {
-    console.log(`[INFO] 已签到: ${message || '今日已签到'}`);
-    await browser.close();
-    process.exit(0);
-  } else {
-    console.error(`[FAIL] 签到失败: ${message || checkinText || '未知错误'}`);
-    await browser.close();
+    // 验证 token 有效（增强可观测性）
+    try {
+      const selfResp = await context.request.get(SELF_URL, {
+        headers: { Authorization: 'Bearer ' + accessToken },
+        timeout: 20000,
+      });
+      console.log(`    [校验] /api/user/self status=${selfResp.status()}`);
+    } catch {}
+
+    // ── 第四步：签到 ──
+    console.log('[4/5] 发送签到请求...');
+    const checkinResp = await context.request.post(CHECKIN_URL, {
+      data: {},
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/plain, */*',
+        'Authorization': 'Bearer ' + accessToken,
+      },
+      timeout: 60000,
+    });
+    const checkinStatus = checkinResp.status();
+    let checkinData = null;
+    try { checkinData = await checkinResp.json(); }
+    catch { checkinData = { raw: await checkinResp.text().catch(() => '') }; }
+
+    console.log(`[INFO] Check-in response status=${checkinStatus}: ${JSON.stringify(checkinData).slice(0, 250)}`);
+
+    // ── 第五步：处理结果 ──
+    console.log('[5/5] 处理结果...');
+    const success = checkinData?.success === true;
+    const message = checkinData?.message || '';
+    const code = checkinData?.code || '';
+    const isAlready = !success && (
+      message.includes('今日已签到') || message.includes('已经签到') ||
+      message.toLowerCase().includes('already')
+    );
+
+    if (success) {
+      const quota = checkinData?.data?.quota_awarded;
+      const date = checkinData?.data?.checkin_date;
+      const extra = quota !== undefined ? ` | 获得额度: ${quota}` : '';
+      const dateStr = date ? ` | 日期: ${date}` : '';
+      console.log(`[SUCCESS] 签到成功${dateStr}${extra}`);
+      process.exit(0);
+    } else if (isAlready) {
+      console.log(`[INFO] 已签到: ${message || '今日已签到'}`);
+      process.exit(0);
+    } else {
+      console.error(`[FAIL] 签到失败: ${message || code || JSON.stringify(checkinData)}`);
+      process.exit(1);
+    }
+  } catch (err) {
+    console.error('[ERROR] 脚本异常:', err?.message || err);
+    if (err?.stack) console.error(err.stack);
     process.exit(1);
+  } finally {
+    await browser.close();
   }
-} catch (err) { console.error("[ERROR] 脚本异常:", err); process.exit(1); } })()
+}
+
+checkin();
