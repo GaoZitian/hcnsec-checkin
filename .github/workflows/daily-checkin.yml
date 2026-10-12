@@ -14,6 +14,7 @@ jobs:
     env:
       HCNSEC_USERNAME: ${{ secrets.HCNSEC_USERNAME }}
       HCNSEC_PASSWORD: ${{ secrets.HCNSEC_PASSWORD }}
+      HCNSEC_STORAGE_STATE: ${{ secrets.HCNSEC_STORAGE_STATE }}
     defaults:
       run:
         working-directory: ./src
