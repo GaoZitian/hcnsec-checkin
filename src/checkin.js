@@ -40,28 +40,30 @@ if (!USERNAME || !PASSWORD) {
 }
 
 /* 从响应体里提取 token（兼容多种 key 名） */
-function extractToken(body) {
+function extractTokenFromResponse(body) {
   if (!body) return '';
-  const d = body.data || {};
-  return (
-    d.access_token || d.accessToken || d.token ||
-    body.access_token || body.accessToken || body.token || ''
-  );
+  const data = body.data || {};
+  if (data.access_token || data.accessToken || data.token) {
+    return data.access_token || data.accessToken || data.token;
+  }
+  return body.access_token || body.accessToken || body.token || '';
 }
 
-/*
- * 从 React 组件内部 props 里读出 Turnstile 输入框的 value。
- * 原理：React 把 value 存在 DOM 元素对应的 __reactProps$ 属性里。
- */
-function readTurnstileToken() {
-  const el = document.querySelector('#cf-turnstile-response') ||
-             document.querySelector('input[id="cf-turnstile-response"]') ||
-             document.querySelector('input[name="cf-turnstile-response"]');
-  if (el) {
-    return el.value || Object.keys(el).find(k => k.startsWith('__reactProps$'))
-      ? (Object.keys(el).find(k => k.startsWith('__reactProps$')) && el[Object.keys(el).find(k => k.startsWith('__reactProps$'))]?.value) || el.value || '' : '';
-  }
-  return '';
+/**
+ * 为 GitHub Actions 优化：在登录前等待 Turnstile token
+ * 最多等待 60 秒确保 token 被生成 */
+async function waitForTurnstileToken(page, maxWaitMs = 60000) {
+  console.log('等待 Turnstile 挑战完成 (最多60秒)...');
+  // 等待cf-turnstile-response输入框被填充
+  const waited = await page.waitForFunction(
+    () => {
+      const input = document.querySelector('input[name="cf-turnstile-response"]');
+      return input && input.value && input.value.length > 10;
+    },
+    { timeout: maxWaitMs }
+  );
+  console.log('    ✅ Turnstile token 获得，长度:', waited.length);
+  return waited;
 }
 
 async function checkin() {
@@ -95,50 +97,10 @@ async function checkin() {
       process.exit(1);
     }
 
-    // 等待 Turnstile iframe 加载并自动完成验证
-    let turnstileToken = '';
-    for (let i = 0; i < 12; i++) {
-      await page.waitForTimeout(2000);
-      const found = await page.evaluate(() => {
-        const el = document.querySelector('#cf-turnstile-response') ||
-                  document.querySelector('input[id="cf-turnstile-response"]') ||
-                  document.querySelector('input[name="cf-turnstile-response"]');
-        if (el && el.value && el.value.length > 50) return el.value;
-        // 尝试 React props
-        const propKey = el && Object.keys(el).find(k => k.startsWith('__reactProps$'));
-        if (propKey && el[propKey] && el[propKey].value && el[propKey].value.length > 50) {
-          return el[propKey].value;
-        }
-        return '';
-      }).catch(() => '');
-      if (found) {
-        turnstileToken = found;
-        console.log(`    ✅ Turnstile 验证完成，token 已生成 (len=${turnstileToken.length})`);
-        break;
-      }
-      // 每轮只诊断一次，避免刷屏
-      if (i === 5 || i === 11) {
-        const diag = await page.evaluate(() => {
-          const out = {};
-          out.inputs = Array.from(document.querySelectorAll('input,textarea')).map(e => ({
-            id: e.id || '', name: e.name || '', type: e.type || '',
-            val: (e.value || '').slice(0, 40), valLen: (e.value || '').length
-          }));
-          out.iframes = Array.from(document.querySelectorAll('iframe')).map(f => f.src || '(no src)');
-          out.turnstileScripts = Array.from(document.querySelectorAll('script'))
-            .filter(s => (s.src || '').includes('turnstile')).map(s => s.src);
-          out.bodyLen = document.body ? document.body.innerHTML.length : 0;
-          out.title = document.title;
-          out.url = location.href;
-          return out;
-        }).catch(e => ({ error: e.message }));
-        console.log('[DEBUG PAGE]', JSON.stringify(diag));
-        try {
-          const shot = await page.screenshot({ path: 'login_debug.png', fullPage: true });
-          console.log('[DEBUG] 截图已保存: login_debug.png');
-        } catch (e) { console.log('[DEBUG] 截图失败:', e.message); }
-      }
-    }
+    // 等待 Turnstile 挑战完成 (最多60秒)
+    const turnstileToken = await waitForTurnstileToken(page, 60000);
+
+    // ── 第二步：直接调用登录 API，带上 cloudflare_token ──
 
     // ── 第二步：直接调用登录 API，带上 cloudflare_token ──
     console.log('[2/5] 调用登录 API...');
