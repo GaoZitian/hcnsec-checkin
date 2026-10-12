@@ -2,19 +2,18 @@
  * HCNSec 每日签到脚本
  *
  * 鉴权机制（已实测确认）：
- *   - 站点是 NewAPI（one-api 分支），签到接口 /api/user/checkin 用
- *     Authorization: Bearer <access_token> 鉴权，不认 Cookie。
- *   - access_token 不在 localStorage、也不在 cookie 里，
- *     它只在 /api/user/login 或 /api/user/auth/refresh 的**响应体**里。
- *   - 之前版本点按钮走 UI 登录，但按钮匹配到兜底选择器、从未真正发出
- *     POST /api/user/login，导致全程空会话，签到必然 AUTH_UNAUTHORIZED。
+ *   1. 登录接口 /api/user/login 需要三个字段：
+ *        username, password, cloudflare_token
+ *      其中 cloudflare_token 由页面上的 Cloudflare Turnstile widget 生成。
+ *   2. 登录成功后 access_token 只在**响应体**里，不进 localStorage、不进 cookie。
+ *   3. 签到接口 /api/user/checkin 用 Authorization: Bearer <access_token> 鉴权。
  *
- * 新策略：不再点按钮，直接调用登录 API。
- *   1. 打开站点首页（通过 Cloudflare、拿到 cf cookies）
- *   2. context.request.post(/api/user/login) 直接登录 → 拿 access_token
- *   3. 若登录响应没带 token，再 post(/api/user/auth/refresh) 换 token
- *      （登录时下发的 new_api_refresh cookie 已由 context 自动携带）
- *   4. context.request.post(/api/user/checkin) + Authorization: Bearer <token>
+ * 策略：
+ *   1. 打开 /login 页面，让 Turnstile widget 自动完成验证
+ *   2. 从 React 组件 props 里读出 cf-turnstile-response 的 value（即 cloudflare_token）
+ *   3. 直接调 /api/user/login，带上 cloudflare_token
+ *   4. 从响应体取 access_token（若无则调 /api/user/auth/refresh 换取）
+ *   5. 用 Bearer token 调 /api/user/checkin
  *
  * 环境变量：HCNSEC_USERNAME / HCNSEC_PASSWORD
  */
@@ -25,6 +24,7 @@ dotenv.config();
 
 const HOST = 'api.hcnsec.cn';
 const BASE = `https://${HOST}`;
+const LOGIN_PAGE = `${BASE}/login`;
 const LOGIN_URL = `${BASE}/api/user/login`;
 const REFRESH_URL = `${BASE}/api/user/auth/refresh`;
 const CHECKIN_URL = `${BASE}/api/user/checkin`;
@@ -49,6 +49,21 @@ function extractToken(body) {
   );
 }
 
+/*
+ * 从 React 组件内部 props 里读出 Turnstile 输入框的 value。
+ * 原理：React 把 value 存在 DOM 元素对应的 __reactProps$ 属性里。
+ */
+function readTurnstileToken() {
+  const el = document.querySelector('#cf-turnstile-response') ||
+             document.querySelector('input[id="cf-turnstile-response"]') ||
+             document.querySelector('input[name="cf-turnstile-response"]');
+  if (el) {
+    return el.value || Object.keys(el).find(k => k.startsWith('__reactProps$'))
+      ? (Object.keys(el).find(k => k.startsWith('__reactProps$')) && el[Object.keys(el).find(k => k.startsWith('__reactProps$'))]?.value) || el.value || '' : '';
+  }
+  return '';
+}
+
 async function checkin() {
   console.log('[INFO] HCNSec daily check-in starting...');
 
@@ -58,33 +73,62 @@ async function checkin() {
   });
   const page = await context.newPage();
   page.setDefaultTimeout(60000);
-  page.setDefaultNavigationTimeout(60000);
+  page.setDefaultNavigationTimeout(90000);
 
   try {
-    // ── 第一步：打开首页，通过 Cloudflare 拿到 cf cookies ──
-    console.log('[1/5] 打开站点首页（通过 Cloudflare）...');
-    let homeOk = false;
+    // ── 第一步：打开登录页，让 Turnstile widget 自动验证 ──
+    console.log('[1/5] 打开登录页，等待 Turnstile 验证...');
+    let loginPageLoaded = false;
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
-        await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 90000 });
-        await page.waitForTimeout(2000);
-        homeOk = true;
-        console.log(`    ✅ 首页加载成功 (尝试 ${attempt}/2)`);
+        await page.goto(LOGIN_PAGE, { waitUntil: 'domcontentloaded', timeout: 120000 });
+        loginPageLoaded = true;
+        console.log(`    ✅ 登录页加载成功 (尝试 ${attempt}/2)`);
         break;
       } catch (e) {
-        console.warn(`[WARN] 首页加载失败 (尝试 ${attempt}/2): ${e.message}`);
+        console.warn(`[WARN] 登录页加载失败 (尝试 ${attempt}/2): ${e.message}`);
         await page.waitForTimeout(3000);
       }
     }
-    if (!homeOk) {
-      console.error('    ❌ 首页加载失败');
+    if (!loginPageLoaded) {
+      console.error('    ❌ 登录页加载失败');
       process.exit(1);
     }
 
-    // ── 第二步：直接调用登录 API（不点按钮）──
+    // 等待 Turnstile iframe 加载并自动完成验证
+    let turnstileToken = '';
+    for (let i = 0; i < 12; i++) {
+      await page.waitForTimeout(2000);
+      const found = await page.evaluate(() => {
+        const el = document.querySelector('#cf-turnstile-response') ||
+                  document.querySelector('input[id="cf-turnstile-response"]') ||
+                  document.querySelector('input[name="cf-turnstile-response"]');
+        if (el && el.value && el.value.length > 50) return el.value;
+        // 尝试 React props
+        const propKey = el && Object.keys(el).find(k => k.startsWith('__reactProps$'));
+        if (propKey && el[propKey] && el[propKey].value && el[propKey].value.length > 50) {
+          return el[propKey].value;
+        }
+        return '';
+      }).catch(() => '');
+      if (found) {
+        turnstileToken = found;
+        console.log(`    ✅ Turnstile 验证完成，token 已生成 (len=${turnstileToken.length})`);
+        break;
+      }
+      if (i === 11) {
+        console.warn('    ⚠️ 未捕获到 Turnstile token，尝试继续（可能被服务端判为无效）');
+      }
+    }
+
+    // ── 第二步：直接调用登录 API，带上 cloudflare_token ──
     console.log('[2/5] 调用登录 API...');
     const loginResp = await context.request.post(LOGIN_URL, {
-      data: { username: USERNAME, password: PASSWORD },
+      data: {
+        username: USERNAME,
+        password: PASSWORD,
+        cloudflare_token: turnstileToken,
+      },
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json, text/plain, */*',
@@ -101,16 +145,18 @@ async function checkin() {
 
     if (loginStatus !== 200 || loginBody?.success !== true) {
       console.error(`    ❌ 登录失败 (status=${loginStatus}, code=${loginCode}, message=${loginBody?.message || '无'})`);
+      if (!turnstileToken) {
+        console.error('    提示：未捕获到 Turnstile token，登录被服务端拒绝。');
+      }
       process.exit(1);
     }
     console.log('    ✅ 登录 API 成功');
 
-    // ── 第三步：取 token ──
+    // ── 第三步：取 access_token ──
     console.log('[3/5] 获取 access_token...');
     let accessToken = extractToken(loginBody);
 
     if (!accessToken) {
-      // 登录响应没带 token → 用 new_api_refresh cookie 换（cookie 已由 context 自动携带）
       console.log('    登录响应未带 token，调用 refresh 端点换取...');
       try {
         const refreshResp = await context.request.post(REFRESH_URL, {
@@ -137,7 +183,7 @@ async function checkin() {
     }
     console.log(`    ✅ access_token 已获取 (len=${accessToken.length})`);
 
-    // 验证 token 有效（增强可观测性）
+    // 验证 token 有效
     try {
       const selfResp = await context.request.get(SELF_URL, {
         headers: { Authorization: 'Bearer ' + accessToken },
