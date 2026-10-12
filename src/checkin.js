@@ -87,7 +87,7 @@ async function checkin() {
     // === 模式 2：本地开发 - 打开可见浏览器手动登录 ===
     console.log('[1/4] 启动可见浏览器进行手动登录...');
     if (!fs.existsSync(STATE_FILE)) {
-      browser = await chromium.launch({ headless: false, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+      browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
       context = await browser.newContext();
       const page = await context.newPage();
       await page.setViewportSize({ width: 1280, height: 720 });
