@@ -1,24 +1,22 @@
 /**
- * HCNSec 每日签到脚本
- *
- * 鉴权机制（已实测确认）：
- *   1. 登录接口 /api/user/login 需要三个字段：
- *        username, password, cloudflare_token
- *      其中 cloudflare_token 由页面上的 Cloudflare Turnstile widget 生成。
- *   2. 登录成功后 access_token 只在**响应体**里，不进 localStorage、不进 cookie。
- *   3. 签到接口 /api/user/checkin 用 Authorization: Bearer <access_token> 鉴权。
- *
- * 策略：
- *   1. 打开 /login 页面，让 Turnstile widget 自动完成验证
- *   2. 从 React 组件 props 里读出 cf-turnstile-response 的 value（即 cloudflare_token）
- *   3. 直接调 /api/user/login，带上 cloudflare_token
- *   4. 从响应体取 access_token（若无则调 /api/user/auth/refresh 换取）
- *   5. 用 Bearer token 调 /api/user/checkin
- *
- * 环境变量：HCNSEC_USERNAME / HCNSEC_PASSWORD
+ * HCNSec 每日签到脚本 - 生产版（支持 storageState 预加载）
+ * 
+ * 运行模式：
+ * 1. GitHub Actions: 从 HCNSEC_STORAGE_STATE 环境变量加载预生成的浏览器状态（无需 Turnstile）
+ * 2. 本地开发: 无环境变量时，打开可见浏览器手动登录，保存状态到 state.json
+ * 
+ * 鉴权机制：
+ *   1. 登录接口 /api/user/login 需要 username, password, cloudflare_token
+ *   2. access_token 只在响应体里，不进 localStorage、不进 cookie
+ *   3. 签到接口 /api/user/checkin 用 Authorization: Bearer *** 鉴权
+ * 
+ * 环境变量：
+ *   HCNSEC_USERNAME / HCNSEC_PASSWORD - 必填
+ *   HCNSEC_STORAGE_STATE - 可选，base64 编码的 storageState JSON（GitHub Actions 使用）
  */
 import { chromium } from 'playwright';
 import * as dotenv from 'dotenv';
+import * as fs from 'fs';
 
 dotenv.config();
 
@@ -29,17 +27,18 @@ const LOGIN_URL = `${BASE}/api/user/login`;
 const REFRESH_URL = `${BASE}/api/user/auth/refresh`;
 const CHECKIN_URL = `${BASE}/api/user/checkin`;
 const SELF_URL = `${BASE}/api/user/self`;
+const STATE_FILE = 'state.json';
 
 const USERNAME = process.env.HCNSEC_USERNAME;
 const PASSWORD = process.env.HCNSEC_PASSWORD;
+// 预生成的 storageState (base64 编码)，GitHub Actions 中通过 Secret 注入
+const STORAGE_STATE_B64 = process.env.HCNSEC_STORAGE_STATE;
 
 if (!USERNAME || !PASSWORD) {
   console.error('[FATAL] 缺少 HCNSEC_USERNAME / HCNSEC_PASSWORD 环境变量');
-  console.error('请在 GitHub Repository Settings → Secrets → Actions 中添加这两个 secret。');
   process.exit(1);
 }
 
-/* 从响应体里提取 token（兼容多种 key 名） */
 function extractTokenFromResponse(body) {
   if (!body) return '';
   const data = body.data || {};
@@ -50,152 +49,145 @@ function extractTokenFromResponse(body) {
 }
 
 /**
- * 为 GitHub Actions 优化：在登录前等待 Turnstile token
- * 最多等待 60 秒确保 token 被生成 */
-async function waitForTurnstileToken(page, maxWaitMs = 60000) {
-  console.log('等待 Turnstile 挑战完成 (最多60秒)...');
-  // 等待cf-turnstile-response输入框被填充
-  const waited = await page.waitForFunction(
-    () => {
-      const input = document.querySelector('input[name="cf-turnstile-response"]');
-      return input && input.value && input.value.length > 10;
-    },
-    { timeout: maxWaitMs }
-  );
-  console.log('    ✅ Turnstile token 获得，长度:', waited.length);
-  return waited;
+ * 从 base64 解码 storageState */
+function loadStorageStateFromEnv() {
+  if (!STORAGE_STATE_B64) return null;
+  try {
+    const json = Buffer.from(STORAGE_STATE_B64, 'base64').toString('utf-8');
+    return JSON.parse(json);
+  } catch (e) {
+    console.error('[WARN] 解码 HCNSEC_STORAGE_STATE 失败:', e.message);
+    return null;
+  }
+}
+
+/**
+ * 保存 storageState 到文件（本地开发用） */
+async function saveStorageState(context) {
+  await context.storageState({ path: STATE_FILE });
+  console.log(`    ✅ 登录状态已保存到 ${STATE_FILE}`);
 }
 
 async function checkin() {
   console.log('[INFO] HCNSec daily check-in starting...');
 
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-  });
+  // 尝试从环境变量加载预生成的 storageState
+  const storageState = loadStorageStateFromEnv();
+  const hasPreloadedState = !!storageState;
+
+  let browser, context;
+
+  if (hasPreloadedState) {
+    // === 模式 1：GitHub Actions - 使用预生成的 storageState ===
+    console.log('[1/4] 加载预生成的登录状态...');
+    browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    context = await browser.newContext({ storageState });
+    console.log('    ✅ 状态加载成功，跳过 Turnstile 验证');
+  } else {
+    // === 模式 2：本地开发 - 打开可见浏览器手动登录 ===
+    console.log('[1/4] 启动可见浏览器进行手动登录...');
+    if (!fs.existsSync(STATE_FILE)) {
+      browser = await chromium.launch({ headless: false, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+      context = await browser.newContext();
+      const page = await context.newPage();
+      await page.setViewportSize({ width: 1280, height: 720 });
+
+      try {
+        console.log('[2/4] 访问登录页...');
+        await page.goto(LOGIN_PAGE, { waitUntil: 'domcontentloaded' });
+
+        console.log('[3/4] 填写用户名和密码...');
+        await page.fill('input[name="username"]', USERNAME);
+        await page.fill('input[name="password"]', PASSWORD);
+
+        const agree = page.locator('input[type="checkbox"]');
+        if (await agree.count() > 0) await agree.check();
+
+        console.log('[4/4] 请在浏览器中完成 Turnstile 验证并点击登录...');
+        console.log('    (最多等待 5 分钟，登录成功后脚本会自动保存状态并退出)');
+
+        // 等待登录成功：URL 离开 /login 或出现用户信息元素
+        await page.waitForFunction(() => {
+          const url = window.location.href;
+          return !url.includes('/login') || document.querySelector('.user-info, .avatar, [data-user]') !== null;
+        }, { timeout: 300000 });
+
+        console.log('    ✅ 检测到登录成功');
+        await saveStorageState(context);
+      } catch (err) {
+        console.error('[ERROR] 手动登录失败:', err?.message || err);
+        process.exit(1);
+      } finally {
+        await browser.close();
+        return; // 首次运行退出，下次使用保存的 state.json
+      }
+    } else {
+      // 有本地 state.json，直接加载
+      console.log('[1/4] 加载本地保存的登录状态...');
+      browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+      context = await browser.newContext({ storageState: STATE_FILE });
+      console.log('    ✅ 本地状态加载成功');
+    }
+  }
+
+  // === 通用签到流程（使用已加载的 storageState）===
   const page = await context.newPage();
-  page.setDefaultTimeout(60000);
-  page.setDefaultNavigationTimeout(90000);
 
   try {
-    // ── 第一步：打开登录页，让 Turnstile widget 自动验证 ──
-    console.log('[1/5] 打开登录页，等待 Turnstile 验证...');
-    let loginPageLoaded = false;
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        await page.goto(LOGIN_PAGE, { waitUntil: 'domcontentloaded', timeout: 120000 });
-        loginPageLoaded = true;
-        console.log(`    ✅ 登录页加载成功 (尝试 ${attempt}/2)`);
-        break;
-      } catch (e) {
-        console.warn(`[WARN] 登录页加载失败 (尝试 ${attempt}/2): ${e.message}`);
-        await page.waitForTimeout(3000);
-      }
-    }
-    if (!loginPageLoaded) {
-      console.error('    ❌ 登录页加载失败');
-      process.exit(1);
-    }
-
-    // 等待 Turnstile 挑战完成 (最多60秒)
-    const turnstileToken = await waitForTurnstileToken(page, 60000);
-
-    // ── 第二步：直接调用登录 API，带上 cloudflare_token ──
-
-    // ── 第二步：直接调用登录 API，带上 cloudflare_token ──
-    console.log('[2/5] 调用登录 API...');
-    const loginResp = await context.request.post(LOGIN_URL, {
-      data: {
-        username: USERNAME,
-        password: PASSWORD,
-        cloudflare_token: turnstileToken,
-      },
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/plain, */*',
-      },
-      timeout: 60000,
+    console.log('[2/4] 验证登录状态...');
+    const selfResponse = await context.request.get(`${BASE}/api/user/self`, {
+      headers: { Accept: 'application/json, text/plain, */*' }
     });
-    const loginStatus = loginResp.status();
-    console.log(`    登录响应 status=${loginStatus}`);
-    let loginBody = null;
-    try { loginBody = await loginResp.json(); } catch {}
 
-    const loginCode = loginBody?.code || loginBody?.data?.code || '';
-    console.log(`    success=${loginBody?.success} code=${loginCode} message=${loginBody?.message || ''}`);
-
-    if (loginStatus !== 200 || loginBody?.success !== true) {
-      console.error(`    ❌ 登录失败 (status=${loginStatus}, code=${loginCode}, message=${loginBody?.message || '无'})`);
-      if (!turnstileToken) {
-        console.error('    提示：未捕获到 Turnstile token，登录被服务端拒绝。');
+    if (selfResponse.status() !== 200) {
+      console.error('    ❌ 登录状态已失效');
+      if (!hasPreloadedState) {
+        console.log('    请删除 state.json 后重新运行');
+      } else {
+        console.log('    请重新生成 HCNSEC_STORAGE_STATE');
       }
       process.exit(1);
     }
-    console.log('    ✅ 登录 API 成功');
+    console.log('    ✅ 登录状态有效');
 
-    // ── 第三步：取 access_token ──
-    console.log('[3/5] 获取 access_token...');
-    let accessToken = extractToken(loginBody);
+    console.log('[3/4] 获取 access_token...');
+    const refreshResponse = await context.request.post(`${BASE}/api/user/auth/refresh`, {
+      headers: { Accept: 'application/json, text/plain, */*' }
+    });
 
-    if (!accessToken) {
-      console.log('    登录响应未带 token，调用 refresh 端点换取...');
-      try {
-        const refreshResp = await context.request.post(REFRESH_URL, {
-          headers: { 'Accept': 'application/json, text/plain, */*' },
-          timeout: 30000,
-        });
-        const refreshStatus = refreshResp.status();
-        let refreshBody = null;
-        try { refreshBody = await refreshResp.json(); } catch {}
-        const rCode = refreshBody?.code || refreshBody?.data?.code || '';
-        console.log(`    refresh 响应 status=${refreshStatus} success=${refreshBody?.success} code=${rCode}`);
-        accessToken = extractToken(refreshBody);
-        if (refreshBody?.success === true && !accessToken) {
-          console.log('    [DEBUG] refresh success 但未找到 token 字段，响应顶层 keys=', Object.keys(refreshBody || {}));
-        }
-      } catch (e) {
-        console.error(`    ❌ refresh 调用失败: ${e.message}`);
-      }
-    }
+    let refreshData = {};
+    try { refreshData = await refreshResponse.json(); }
+    catch (e) { refreshData = { raw: await refreshResponse.text() } };
 
-    if (!accessToken) {
-      console.error('    ❌ 未获取到 access_token，无法签到');
+    if (refreshData.success !== true) {
+      console.error(`    ❌ 获取 access_token 失败: ${refreshData?.message || '未知错误'}`);
       process.exit(1);
     }
-    console.log(`    ✅ access_token 已获取 (len=${accessToken.length})`);
 
-    // 验证 token 有效
-    try {
-      const selfResp = await context.request.get(SELF_URL, {
-        headers: { Authorization: 'Bearer ' + accessToken },
-        timeout: 20000,
-      });
-      console.log(`    [校验] /api/user/self status=${selfResp.status()}`);
-    } catch {}
+    const accessToken = extractTokenFromResponse(refreshData);
+    console.log(`    ✅ 获得 access_token (长度: ${accessToken.length})`);
 
-    // ── 第四步：签到 ──
-    console.log('[4/5] 发送签到请求...');
-    const checkinResp = await context.request.post(CHECKIN_URL, {
+    console.log('[4/4] 执行签到...');
+    const checkinResponse = await context.request.post(`${BASE}/api/user/checkin`, {
       data: {},
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json, text/plain, */*',
-        'Authorization': 'Bearer ' + accessToken,
-      },
-      timeout: 60000,
+        'Authorization': `Bearer ${accessToken}`
+      }
     });
-    const checkinStatus = checkinResp.status();
-    let checkinData = null;
-    try { checkinData = await checkinResp.json(); }
-    catch { checkinData = { raw: await checkinResp.text().catch(() => '') }; }
 
-    console.log(`[INFO] Check-in response status=${checkinStatus}: ${JSON.stringify(checkinData).slice(0, 250)}`);
+    let checkinData;
+    try {
+      checkinData = await checkinResponse.json();
+    } catch {
+      checkinData = { raw: await checkinResponse.text() };
+    }
+    console.log(`    签到响应: status=${checkinResponse.status()}`);
 
-    // ── 第五步：处理结果 ──
-    console.log('[5/5] 处理结果...');
+    // 处理结果
     const success = checkinData?.success === true;
     const message = checkinData?.message || '';
-    const code = checkinData?.code || '';
     const isAlready = !success && (
       message.includes('今日已签到') || message.includes('已经签到') ||
       message.toLowerCase().includes('already')
@@ -209,15 +201,14 @@ async function checkin() {
       console.log(`[SUCCESS] 签到成功${dateStr}${extra}`);
       process.exit(0);
     } else if (isAlready) {
-      console.log(`[INFO] 已签到: ${message || '今日已签到'}`);
+      console.log(`[INFO] 已签到: ${message}`);
       process.exit(0);
     } else {
-      console.error(`[FAIL] 签到失败: ${message || code || JSON.stringify(checkinData)}`);
+      console.error(`[FAIL] 签到失败: ${message}`);
       process.exit(1);
     }
   } catch (err) {
-    console.error('[ERROR] 脚本异常:', err?.message || err);
-    if (err?.stack) console.error(err.stack);
+    console.error('[ERROR] 签到过程出错:', err?.message || err);
     process.exit(1);
   } finally {
     await browser.close();
