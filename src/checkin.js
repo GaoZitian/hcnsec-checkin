@@ -116,8 +116,27 @@ async function checkin() {
         console.log(`    ✅ Turnstile 验证完成，token 已生成 (len=${turnstileToken.length})`);
         break;
       }
-      if (i === 11) {
-        console.warn('    ⚠️ 未捕获到 Turnstile token，尝试继续（可能被服务端判为无效）');
+      // 每轮只诊断一次，避免刷屏
+      if (i === 5 || i === 11) {
+        const diag = await page.evaluate(() => {
+          const out = {};
+          out.inputs = Array.from(document.querySelectorAll('input,textarea')).map(e => ({
+            id: e.id || '', name: e.name || '', type: e.type || '',
+            val: (e.value || '').slice(0, 40), valLen: (e.value || '').length
+          }));
+          out.iframes = Array.from(document.querySelectorAll('iframe')).map(f => f.src || '(no src)');
+          out.turnstileScripts = Array.from(document.querySelectorAll('script'))
+            .filter(s => (s.src || '').includes('turnstile')).map(s => s.src);
+          out.bodyLen = document.body ? document.body.innerHTML.length : 0;
+          out.title = document.title;
+          out.url = location.href;
+          return out;
+        }).catch(e => ({ error: e.message }));
+        console.log('[DEBUG PAGE]', JSON.stringify(diag));
+        try {
+          const shot = await page.screenshot({ path: 'login_debug.png', fullPage: true });
+          console.log('[DEBUG] 截图已保存: login_debug.png');
+        } catch (e) { console.log('[DEBUG] 截图失败:', e.message); }
       }
     }
 
