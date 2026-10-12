@@ -57,18 +57,33 @@ if (!USERNAME || !PASSWORD) {
   page.setDefaultTimeout(60000);
   page.setDefaultNavigationTimeout(60000);
 
-  // --- 关键：全局响应监听器捕获登录响应的 Set-Cookie 头 ---
-  let capturedLoginCookies = [];
+  // --- 关键：全局响应监听器捕获登录响应的 Set-Cookie 头 和 响应体(access_token) ---
+  let capturedLoginCookies = '';
+  let capturedLoginBody = null;
   page.on('response', async response => {
     const url = response.url();
-    const setCookie = response.headers()['set-cookie'];
-    if (setCookie && url.includes('/login') && response.request().method() === 'POST') {
-      // 登录 POST 响应，捕获所有 Set-Cookie
-      console.log('[DEBUG LOGIN RESPONSE] Full Set-Cookie headers:', setCookie);
-      capturedLoginCookies = setCookie.map(c => c.split(';')[0].trim()).join('; ');
-      console.log('[DEBUG] Captured login cookie string:', capturedLoginCookies);
-    } else if (setCookie && url.includes('api.hcnsec.cn')) {
-      console.log(`[DEBUG RESPONSE] ${url} -> Set-Cookie:`, setCookie);
+    const method = response.request().method();
+    if (url.includes('/login') && method === 'POST') {
+      // 登录 POST 响应：捕获 Set-Cookie 与响应体（NewAPI 的 access_token 在响应体 data 中）
+      const setCookie = response.headers()['set-cookie'];
+      if (setCookie) {
+        console.log('[DEBUG LOGIN RESPONSE] Set-Cookie:', setCookie);
+        capturedLoginCookies = setCookie.map(c => c.split(';')[0].trim()).join('; ');
+      }
+      try {
+        const body = await response.json();
+        capturedLoginBody = body;
+        // 打印 data 层所有 key（不打印 token 全文，避免凭证泄露）
+        const dataKeys = body?.data ? Object.keys(body.data) : [];
+        console.log('[DEBUG LOGIN RESPONSE] body.success=', body?.success, ' data keys=', JSON.stringify(dataKeys));
+      } catch (e) {
+        console.log('[DEBUG LOGIN RESPONSE] 无法解析 body:', e.message);
+      }
+    } else if (url.includes('api.hcnsec.cn')) {
+      const setCookie = response.headers()['set-cookie'];
+      if (setCookie) {
+        console.log(`[DEBUG RESPONSE] ${url} -> Set-Cookie:`, setCookie);
+      }
     }
   });
 
@@ -426,22 +441,41 @@ if (!USERNAME || !PASSWORD) {
   cookieString = cookieString.replace(/; $/, '');
   console.log('[DEBUG] Constructed Cookie string for checkin:', cookieString || '(空)');
 
-    // --- 第三步：使用新登录会话进行签到 ---
-  // 使用 page.evaluate 发送请求，这样可以确保浏览器上下文中的所有 Cookie（包括 HttpOnly）都被自动携带
-  console.log('[3/5] 使用新登录会话进行签到...');
+    // --- 第三步：使用登录会话的 access_token 进行签到 ---
+  // NewAPI 的 /api/user/checkin 通过 Authorization: Bearer <access_token> 鉴权，
+  // access_token 由登录成功后 SPA 写入 localStorage。仅靠 Cookie 会报 "access token 无效"。
+  console.log('[3/5] 使用登录会话进行签到...');
   console.log('[3.1/5] 发送签到请求...');
 
-  // 关键：使用捕获的登录响应 Cookie 手动构建 Cookie 头
-  // 如果浏览器上下文没有捕获到 HttpOnly cookie，我们手动补充
-  const manualCookieHeader = (typeof capturedLoginCookies !== 'undefined' && capturedLoginCookies) ? capturedLoginCookies : '';
-  console.log('[DEBUG] Manual cookie header for checkin:', manualCookieHeader || '(无捕获到的登录响应 Cookie)');
+  // 从 localStorage 提取 access_token（登录成功后 SPA 会写入）
+  // NewAPI 默认 key 是 access_token；同时兼容 accessToken / token
+  let accessToken = await page.evaluate(() => {
+    for (const k of ['access_token', 'accessToken', 'token']) {
+      const v = localStorage.getItem(k);
+      if (v) return v;
+    }
+    return '';
+  });
+  // 兜底：SPA 可能没写 localStorage，直接从登录响应体里取
+  if (!accessToken && capturedLoginBody) {
+    const d = capturedLoginBody?.data;
+    accessToken = d?.access_token || d?.accessToken || d?.token || (capturedLoginBody?.access_token) || '';
+    if (accessToken) console.log('[DEBUG] access_token 来自登录响应体');
+  }
+  console.log('[DEBUG] access_token for checkin:', accessToken ? accessToken.slice(0, 24) + '... (len=' + accessToken.length + ')' : '(未找到)');
 
-  const checkinText = await page.evaluate(async ({ url, cookieHeader }) => {
+  // 同时保留 Cookie 头作为兜底
+  const manualCookieHeader = capturedLoginCookies || '';
+
+  const checkinText = await page.evaluate(async ({ url, token, cookieHeader }) => {
     const headers = {
       'Accept': 'application/json, text/plain, */*',
       'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
       'Content-Type': 'application/json',
     };
+    if (token) {
+      headers['Authorization'] = 'Bearer ' + token;
+    }
     if (cookieHeader) {
       headers['Cookie'] = cookieHeader;
     }
@@ -449,10 +483,10 @@ if (!USERNAME || !PASSWORD) {
       method: 'POST',
       headers: headers,
       body: JSON.stringify({}),
-      credentials: 'include' // 确保发送 Cookie
+      credentials: 'include' // 同时发送浏览器 Cookie
     });
     return await response.text();
-  }, { url: CHECKIN_URL, cookieHeader: manualCookieHeader });
+  }, { url: CHECKIN_URL, token: accessToken, cookieHeader: manualCookieHeader });
 
   let checkinData;
   try { checkinData = JSON.parse(checkinText); } catch { checkinData = { raw: checkinText }; }
