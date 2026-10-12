@@ -60,6 +60,7 @@ if (!USERNAME || !PASSWORD) {
   // --- 关键：全局请求/响应监听器，捕获所有 /api/ 调用（定位真实的 token 交换路径）---
   let capturedLoginCookies = '';
   let capturedLoginBody = null;
+  let capturedRefreshToken = '';
   page.on('request', req => {
     const u = req.url();
     if (u.includes('/api/') && req.method() === 'POST') {
@@ -70,24 +71,32 @@ if (!USERNAME || !PASSWORD) {
     const url = response.url();
     const method = response.request().method();
     const isLoginPost = method === 'POST' && (url.includes('/api/user/login') || url.includes('/login'));
-    if (isLoginPost) {
+    // 关键：SPA 登录后调用 /api/user/auth/refresh 换取 access_token
+    const isRefresh = method === 'POST' && url.includes('/api/user/auth/refresh');
+    if (isLoginPost || isRefresh) {
       const setCookie = response.headers()['set-cookie'];
       if (setCookie) {
         capturedLoginCookies = setCookie.map(c => c.split(';')[0].trim()).join('; ');
-        console.log('[DEBUG LOGIN RESPONSE] Set-Cookie:', setCookie);
       }
       try {
         const body = await response.json();
-        capturedLoginBody = body;
-        const dataKeys = body?.data ? Object.keys(body.data) : [];
-        console.log('[DEBUG LOGIN RESPONSE]', url, 'success=', body?.success, ' topKeys=', Object.keys(body||{}), ' dataKeys=', JSON.stringify(dataKeys));
+        if (isRefresh) {
+          capturedLoginBody = body;
+          // NewAPI refresh 响应：data.access_token 或 data.token
+          const d = body?.data;
+          const tok = d?.access_token || d?.token || d?.accessToken || body?.access_token || '';
+          if (tok) {
+            capturedRefreshToken = tok;
+            console.log('[DEBUG REFRESH RESPONSE] token found, len=', tok.length, ' topKeys=', Object.keys(body||{}));
+          } else {
+            console.log('[DEBUG REFRESH RESPONSE] success=', body?.success, ' topKeys=', Object.keys(body||{}), ' dataKeys=', d ? Object.keys(d) : []);
+          }
+        } else {
+          capturedLoginBody = body;
+          console.log('[DEBUG LOGIN RESPONSE]', url, 'success=', body?.success, ' dataKeys=', body?.data ? Object.keys(body.data) : []);
+        }
       } catch (e) {
-        console.log('[DEBUG LOGIN RESPONSE] 无法解析 body:', e.message);
-      }
-    } else if (url.includes('/api/') && method === 'POST') {
-      const setCookie = response.headers()['set-cookie'];
-      if (setCookie) {
-        console.log(`[DEBUG API POST+Cookie] ${url} -> ${setCookie}`);
+        console.log('[DEBUG REFRESH/LOGIN RESPONSE] 无法解析 body:', e.message);
       }
     }
   });
@@ -452,26 +461,29 @@ if (!USERNAME || !PASSWORD) {
   console.log('[3/5] 使用登录会话进行签到...');
   console.log('[3.1/5] 发送签到请求...');
 
-  // 从 localStorage 提取 access_token（登录成功后 SPA 会写入）
-  // 先 dump 所有 key 便于定位真实 key，再从常见 key 取值
+  // 从 localStorage 提取 access_token（登录成功后 SPA 可能写入，但本站实测未写入）
   const lsKeys = await page.evaluate(() => Object.keys(localStorage));
   console.log('[DEBUG] localStorage keys:', JSON.stringify(lsKeys));
   let accessToken = await page.evaluate(() => {
-    for (const k of ['access_token', 'accessToken', 'token', 'access_token']) {
+    for (const k of ['access_token', 'accessToken', 'token']) {
       const v = localStorage.getItem(k);
       if (v) return v;
     }
-    // 兜底：任何 value 含 "Bearer"/jwt 结构 (eyJ 开头) 的 key
     for (const [k, v] of Object.entries(localStorage)) {
-      if (typeof v === 'string' && (v.startsWith('eyJ') || /access[_-]?token/i.test(k) || /bearer/i.test(k))) return v;
+      if (typeof v === 'string' && (v.startsWith('eyJ') || /access[_-]?token/i.test(k))) return v;
     }
     return '';
   });
-  // 兜底：SPA 可能没写 localStorage，直接从登录响应体里取
+  // 关键：本站 SPA 把 token 存在 React 内存里，localStorage 没有。
+  // 真正可用的是 /api/user/auth/refresh 响应体里的 token（已由监听器捕获到 capturedRefreshToken）。
+  if (capturedRefreshToken) {
+    accessToken = capturedRefreshToken;
+    console.log('[DEBUG] access_token 来自 /api/user/auth/refresh 响应体');
+  }
+  // 再兜底：登录/refresh 响应体
   if (!accessToken && capturedLoginBody) {
     const d = capturedLoginBody?.data;
     accessToken = d?.access_token || d?.accessToken || d?.token || (capturedLoginBody?.access_token) || '';
-    if (accessToken) console.log('[DEBUG] access_token 来自登录响应体');
   }
   console.log('[DEBUG] access_token for checkin:', accessToken ? accessToken.slice(0, 24) + '... (len=' + accessToken.length + ')' : '(未找到)');
 
