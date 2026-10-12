@@ -57,46 +57,39 @@ if (!USERNAME || !PASSWORD) {
   page.setDefaultTimeout(60000);
   page.setDefaultNavigationTimeout(60000);
 
-  // --- 关键：全局请求/响应监听器，捕获所有 /api/ 调用（定位真实的 token 交换路径）---
+  // --- 全局监听器：完整记录登录链路（定位 login 端点与 token 来源）---
   let capturedLoginCookies = '';
   let capturedLoginBody = null;
   let capturedRefreshToken = '';
   page.on('request', req => {
     const u = req.url();
-    if (u.includes('/api/') && req.method() === 'POST') {
-      console.log('[DEBUG API CALL]', req.method(), u);
+    if (u.includes('/api/')) {
+      console.log('[DEBUG REQ]', req.method(), u.replace('https://api.hcnsec.cn', ''));
     }
   });
   page.on('response', async response => {
     const url = response.url();
     const method = response.request().method();
-    const isLoginPost = method === 'POST' && (url.includes('/api/user/login') || url.includes('/login'));
-    // 关键：SPA 登录后调用 /api/user/auth/refresh 换取 access_token
-    const isRefresh = method === 'POST' && url.includes('/api/user/auth/refresh');
-    if (isLoginPost || isRefresh) {
-      const setCookie = response.headers()['set-cookie'];
-      if (setCookie) {
-        capturedLoginCookies = setCookie.map(c => c.split(';')[0].trim()).join('; ');
-      }
+    if (!url.includes('/api/')) return;
+    const path = url.replace('https://api.hcnsec.cn', '');
+    const setCookie = response.headers()['set-cookie'];
+    if (setCookie) {
+      console.log(`[DEBUG SETCOOKIE] ${method} ${path} ->`, setCookie);
+      capturedLoginCookies = setCookie.map(c => c.split(';')[0].trim()).join('; ');
+    }
+    if (method === 'POST' && (path.includes('/login') || path.includes('/auth/refresh') || path.includes('/user/login'))) {
       try {
         const body = await response.json();
-        if (isRefresh) {
-          capturedLoginBody = body;
-          // NewAPI refresh 响应：data.access_token 或 data.token
+        const top = Object.keys(body || {});
+        const dkeys = body?.data ? Object.keys(body.data) : [];
+        console.log(`[DEBUG POST BODY] ${method} ${path} status=${response.status()} success=${body?.success} topKeys=${JSON.stringify(top)} dataKeys=${JSON.stringify(dkeys)} code=${body?.code || body?.data?.code || ''}`);
+        if (path.includes('/auth/refresh') || path.includes('/login')) {
           const d = body?.data;
           const tok = d?.access_token || d?.token || d?.accessToken || body?.access_token || '';
-          if (tok) {
-            capturedRefreshToken = tok;
-            console.log('[DEBUG REFRESH RESPONSE] token found, len=', tok.length, ' topKeys=', Object.keys(body||{}));
-          } else {
-            console.log('[DEBUG REFRESH RESPONSE] success=', body?.success, ' topKeys=', Object.keys(body||{}), ' dataKeys=', d ? Object.keys(d) : []);
-          }
-        } else {
-          capturedLoginBody = body;
-          console.log('[DEBUG LOGIN RESPONSE]', url, 'success=', body?.success, ' dataKeys=', body?.data ? Object.keys(body.data) : []);
+          if (tok) { capturedLoginBody = body; capturedRefreshToken = tok; console.log('[DEBUG] token FOUND from', path, 'len=' + tok.length); }
         }
       } catch (e) {
-        console.log('[DEBUG REFRESH/LOGIN RESPONSE] 无法解析 body:', e.message);
+        console.log(`[DEBUG POST BODY] ${method} ${path} 解析失败:`, e.message);
       }
     }
   });
