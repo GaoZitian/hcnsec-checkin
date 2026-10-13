@@ -1,0 +1,219 @@
+/**
+ * HCNSec 每日签到脚本
+ * 核心策略：始终使用 GitHub Secrets 中的账号密码进行完整登录，
+ * 确保每日签到都有有效的认证 Cookie，不依赖不完整的 storageState 缓存。
+ *
+ * 环境变量（GitHub Secrets 或本地 .env）：
+ *   HCNSEC_USERNAME / HCNSEC_PASSWORD   — 用于自动登录
+ *
+ * 签到流程：
+ *   1. 用 HCNSEC_USERNAME/HCNSEC_PASSWORD 打开登录页并填入表单
+ *   2. 勾选同意条款，处理 Cloudflare Turnstile 验证
+ *   3. 点击登录按钮，等待登录成功（/api/user/self 返回 200 或页面跳转）
+ *   4. 使用 Playwright page.request.post 自动携带所有有效 Cookie 进行签到
+ *   5. 输出签到结果：成功 / 已签到 / 失败
+ *
+ * 输出：
+ *   - 签到成功 / 已签到 / 失败，并返回相应 exit code
+ */
+import { chromium } from 'playwright';
+import * as dotenv from 'dotenv';
+
+dotenv.config();
+
+const HOST = 'api.hcnsec.cn';
+const BASE = `https://${HOST}`;
+const SELF_URL = `${BASE}/api/user/self`;
+const CHECKIN_URL = `${BASE}/api/user/checkin`;
+
+const USERNAME = process.env.HCNSEC_USERNAME;
+const PASSWORD = process.env.HCNSEC_PASSWORD;
+
+if (!USERNAME || !PASSWORD) {
+  console.error('[FATAL] 缺少 HCNSEC_USERNAME / HCNSEC_PASSWORD 环境变量');
+  console.error('请在 GitHub Repository Settings → Secrets → Actions 中添加这两个 secret。');
+  process.exit(1);
+}
+
+try {
+(async () => {
+  console.log('[INFO] HCNSec daily check-in starting...');
+
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  page.setDefaultTimeout(60000);
+  page.setDefaultNavigationTimeout(60000);
+
+  page.on('response', async response => {
+    const url = response.url();
+    const setCookie = response.headers()['set-cookie'];
+    if (setCookie) {
+      if (url.includes('api.hcnsec.cn')) {
+        console.log(`[DEBUG RESPONSE] ${url} -> Set-Cookie:`, setCookie[0]?.split(';')[0]);
+      }
+    }
+  });
+
+  console.log('[1/5] 使用账号密码自动登录...');
+  console.log('[1.1/5] 打开登录页...');
+  try {
+    await page.goto('https://api.hcnsec.cn/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  } catch (e) {
+    console.warn('[WARN] 登录页加载超时，尝试继续...', e.message);
+  }
+  await page.waitForTimeout(3000);
+
+  console.log('[1.2/5] 填入用户名...');
+  let usernameFilled = false;
+  const usernameSelectors = [
+    'input[placeholder="用户名或电子邮件"]',
+    'input[placeholder*="用户名"]',
+    'input[name="username"]',
+    'input[type="text"]:not([type="hidden"])',
+    'input:not([type="password"]):not([type="hidden"]):not([type="submit"]):not([type="button"])',
+  ];
+  for (const selector of usernameSelectors) {
+    try {
+      await page.waitForSelector(selector, { state: 'visible', timeout: 8000 });
+      await page.fill(selector, USERNAME, { timeout: 5000 });
+      console.log(`    ✅ 用户名已填入 (${selector})`);
+      usernameFilled = true;
+      break;
+    } catch (e) {}
+  }
+  if (!usernameFilled) {
+    console.error('    ❌ 无法填入用户名：所有选择器均失败');
+    await browser.close(); process.exit(1);
+  }
+
+  console.log('[1.3/5] 填入密码...');
+  let passwordFilled = false;
+  const passwordSelectors = [
+    'input[placeholder="密码"]',
+    'input[type="password"]',
+    'input[name="password"]',
+  ];
+  for (const selector of passwordSelectors) {
+    try {
+      await page.waitForSelector(selector, { state: 'visible', timeout: 8000 });
+      await page.fill(selector, PASSWORD, { timeout: 5000 });
+      console.log(`    ✅ 密码已填入 (${selector})`);
+      passwordFilled = true;
+      break;
+    } catch (e) {}
+  }
+  if (!passwordFilled) {
+    console.error('    ❌ 无法填入密码：所有选择器均失败');
+    await browser.close(); process.exit(1);
+  }
+
+  console.log('[1.4/5] 勾选同意条款...');
+  let checkboxChecked = false;
+  try { const cb = page.getByRole('checkbox', { name: /我已阅读并同意/ }); await cb.waitFor({ state: 'visible', timeout: 15000 }); await cb.check({ force: true }); console.log('    ✅ 已勾选同意条款 (role)'); checkboxChecked = true; } catch (e) {}
+  if (!checkboxChecked) {
+    try { const cb = page.locator('label:has-text("我已阅读并同意") >> input[type="checkbox"]'); await cb.waitFor({ state: 'visible', timeout: 10000 }); await cb.check({ force: true }); console.log('    ✅ 已勾选同意条款 (label)'); checkboxChecked = true; } catch (e2) {}
+  }
+  if (!checkboxChecked) {
+    try { const cb = page.locator('input[type="checkbox"]').first(); await cb.waitFor({ state: 'visible', timeout: 10000 }); await cb.check({ force: true }); console.log('    ✅ 已勾选同意条款 (first)'); checkboxChecked = true; } catch (e3) {}
+  }
+  if (!checkboxChecked) {
+    try { await page.evaluate(() => { const cbs = document.querySelectorAll('input[type="checkbox"]'); for (const cb of cbs) { if (!cb.checked) { cb.click(); return true; } } return false; }); console.log('    ✅ 已勾选同意条款 (evaluate)'); checkboxChecked = true; } catch (e4) { console.warn('    ⚠️ 勾选失败:', e4.message); }
+  }
+  await page.waitForTimeout(1000);
+
+  console.log('[1.5/5] 检查 Cloudflare 验证...');
+  try {
+    const cfIframe = page.frameLocator('iframe[title*="Cloudflare"], iframe[title*="challenge"], iframe[title*="验证"]');
+    const cfVisible = await cfIframe.locator('input[type="checkbox"], button:has-text("验证"), button:has-text("Verify")').first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => null);
+    if (cfVisible) {
+      console.log('    检测到 Cloudflare 验证，处理中...');
+      await cfIframe.locator('input[type="checkbox"]').first().check({ force: true, timeout: 5000 }).catch(() => {});
+      await cfIframe.locator('button:has-text("验证"), button:has-text("Verify"), button:has-text("我是人类")').first().click({ force: true, timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(5000);
+      console.log('    ✅ Cloudflare 验证处理完成');
+    } else { console.log('    未检测到 Cloudflare 验证'); }
+  } catch (e) { console.log('    Cloudflare 检查出错:', e.message); }
+
+  console.log('[1.6/5] 查找并点击登录按钮...');
+  let loginClicked = false;
+  const loginSelectors = [
+    'button[type="submit"]', 'button:has-text("登录")', 'button:has-text("登 录")',
+    'button:has-text("登  录")', 'button:has-text("Sign in")', 'button:has-text("Sign In")',
+    'input[type="submit"]', 'button:not([disabled]):visible', 'button'
+  ];
+  for (const sel of loginSelectors) {
+    try {
+      const btn = page.locator(sel).first();
+      await btn.waitFor({ state: 'visible', timeout: 8000 });
+      if (await btn.isDisabled()) {
+        await page.waitForFunction((s) => { const el = document.querySelector(s); return el && !el.disabled; }, sel, { timeout: 30000 });
+      }
+      await btn.click({ force: true, timeout: 5000 });
+      console.log(`    ✅ 登录按钮已点击 (${sel})`);
+      loginClicked = true; break;
+    } catch (e) {}
+  }
+  if (!loginClicked) { await page.keyboard.press('Enter'); console.log('    ✅ 已按 Enter 提交'); loginClicked = true; }
+
+  console.log('[1.7/5] 等待登录验证...');
+  let loginSuccess = false;
+  try { await page.waitForResponse(async (resp) => resp.url().includes('/api/user/self') && resp.status() === 200, { timeout: 15000 }); console.log('    ✅ 登录成功 (/api/user/self 返回 200)'); loginSuccess = true; } catch (e) {}
+  if (!loginSuccess) {
+    try { await page.waitForURL((url) => !url.toString().includes('/login'), { timeout: 10000 }); console.log('    ✅ 登录成功 (页面跳转离开登录页)'); loginSuccess = true; } catch (e2) {}
+  }
+  if (!loginSuccess) {
+    try { const testResp = await page.goto(SELF_URL, { waitUntil: 'networkidle', timeout: 10000 }); if (testResp && testResp.status() === 200) { console.log('    ✅ 登录成功 (直接访问 /api/user/self 返回 200)'); loginSuccess = true; } } catch (e3) { console.error('    ❌ 登录失败'); await browser.close(); process.exit(1); } }
+  }
+  if (!loginSuccess) { console.error('    ❌ 未能验证登录成功'); await browser.close(); process.exit(1); }
+
+  console.log('    ✅ 已完成登录 - 浏览器上下文已包含 Cookie');
+
+  console.log('[3/5] 使用新登录会话进行签到...');
+  console.log('[3.1/5] 发送签到请求...');
+  let checkinResponse;
+  try {
+    checkinResponse = await page.evaluate(async (url) => {
+      console.log('[DEBUG] fetch started for:', url);
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json, text/plain, */*',
+          'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({}),
+        credentials: 'include'
+      });
+      console.log('[DEBUG] fetch completed, response type:', typeof response);
+      console.log('[DEBUG] response has text method:', typeof response.text === 'function');
+      return response;
+    }, CHECKIN_URL);
+  } catch (e) { console.error('[ERROR] 发送签到请求失败:', e.message); await browser.close(); process.exit(1); }
+  let checkinText; try { checkinText = await checkinResponse.text(); } catch { checkinText = ''; }
+  let checkinData; try { checkinData = JSON.parse(checkinText); } catch { checkinData = { raw: checkinText }; }
+  console.log('[INFO] Check-in response:', JSON.stringify(checkinData).slice(0, 200));
+
+  const success = checkinData?.success === true;
+  const message = checkinData?.message || '';
+  const isAlready = !success && (message.includes('今日已签到') || message.includes('已经签到') || message.toLowerCase().includes('already'));
+
+  if (checkinResponse.ok() && success) {
+    const quota = checkinData?.data?.quota_awarded;
+    const date = checkinData?.data?.checkin_date;
+    const extra = quota !== undefined ? ` | 获得额度: ${quota}` : '';
+    const dateStr = date ? ` | 日期: ${date}` : '';
+    console.log(`[SUCCESS] 签到成功${dateStr}${extra}`);
+    await browser.close(); process.exit(0);
+  } else if (checkinResponse.ok() && isAlready) {
+    console.log(`[INFO] 已签到: ${message || '今日已签到'}`);
+    await browser.close(); process.exit(0);
+  } else {
+    const httpStatus = checkinResponse.status;
+    const errorMessage = message || checkinText || `HTTP ${httpStatus}`;
+    console.error(`[FAIL] 签到失败: ${errorMessage}`);
+    await browser.close(); process.exit(1);
+  }
+}).catch(err => { console.error('[ERROR] 脚本异常:', err); process.exit(1); });
+} catch(e) { console.error('[FATAL] 脚本启动错误:', e); process.exit(1); }
