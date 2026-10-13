@@ -53,10 +53,14 @@ function extractTokenFromResponse(body) {
 function loadStorageStateFromEnv() {
   if (!STORAGE_STATE_B64) return null;
   try {
-    const json = Buffer.from(STORAGE_STATE_B64, 'base64').toString('utf-8');
+    // 增加 trim() 防止复制时带入空格或换行
+    const json = Buffer.from(STORAGE_STATE_B64.trim(), 'base64').toString('utf-8');
     return JSON.parse(json);
   } catch (e) {
-    console.error('[WARN] 解码 HCNSEC_STORAGE_STATE 失败:', e.message);
+    console.error('[FATAL] HCNSEC_STORAGE_STATE 格式错误:');
+    console.error('    - 请确保你复制的是纯 Base64 字符串');
+    console.error('    - 错误详情:', e.message);
+    if (process.env.GITHUB_ACTIONS === 'true') process.exit(1); // CI环境下直接退出，防止后续崩溃
     return null;
   }
 }
@@ -87,7 +91,14 @@ async function checkin() {
     // === 模式 2：本地开发 - 打开可见浏览器手动登录 ===
     console.log('[1/4] 启动可见浏览器进行手动登录...');
     if (!fs.existsSync(STATE_FILE)) {
-      browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+      const isCI = process.env.GITHUB_ACTIONS === 'true';
+      if (isCI) {
+        console.error('[FATAL] 远程 CI 环境禁止启动可见浏览器。');
+        console.error('    原因：未检测到有效的 HCNSEC_STORAGE_STATE 或状态加载失败。');
+        console.error('    请检查 GitHub Secrets 中是否正确配置了 Base64 编码的状态字符串。');
+        process.exit(1);
+      }
+      browser = await chromium.launch({ headless: false, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
       context = await browser.newContext();
       const page = await context.newPage();
       await page.setViewportSize({ width: 1280, height: 720 });
@@ -100,8 +111,11 @@ async function checkin() {
         await page.fill('input[name="username"]', USERNAME);
         await page.fill('input[name="password"]', PASSWORD);
 
-        const agree = page.locator('input[type="checkbox"]');
-        if (await agree.count() > 0) await agree.check();
+        // 勾选协议 checkbox（可能被 aria-hidden / 视口外，直接用 JS 勾选更稳）
+        await page.evaluate(() => {
+          const boxes = document.querySelectorAll('input[type="checkbox"]');
+          boxes.forEach(b => { b.checked = true; b.scrollIntoView(); b.click(); });
+        });
 
         console.log('[4/4] 请在浏览器中完成 Turnstile 验证并点击登录...');
         console.log('    (最多等待 5 分钟，登录成功后脚本会自动保存状态并退出)');
