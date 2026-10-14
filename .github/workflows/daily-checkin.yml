@@ -9,7 +9,7 @@ on:
 jobs:
   checkin:
     name: Sign in
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 10
     env:
       # 纯 HTTP 签到，只需刷新令牌（JWT，不绑 IP）
