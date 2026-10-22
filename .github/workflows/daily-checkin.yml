@@ -12,8 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # 纯 HTTP 签到，使用个人访问令牌（Bearer token，不绑 IP）
-      HCNSEC_API_TOKEN: ${{ secrets.HCNSEC_API_TOKEN }}
+      # 使用账号密码登录（Playwright 自动化）
+      HCNSEC_USERNAME: ${{ secrets.HCNSEC_USERNAME }}
+      HCNSEC_PASSWORD: ${{ secrets.HCNSEC_PASSWORD }}
     defaults:
       run:
         working-directory: ./src
