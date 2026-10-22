@@ -303,7 +303,37 @@ if (!USERNAME || !PASSWORD) {
     process.exit(1);
   }
 
-  // --- 第二步：确保所有认证 Cookie 已存入浏览器上下文 ---
+  // --- 第二步：获取 access token（从 localStorage 或登录响应） ---
+  console.log('[2/5] 获取 access token...');
+  let accessToken = '';
+  try {
+    // 尝试从 localStorage 获取
+    accessToken = await page.evaluate(() => {
+      return localStorage.getItem('access_token') 
+          || localStorage.getItem('token') 
+          || localStorage.getItem('accessToken')
+          || sessionStorage.getItem('access_token')
+          || sessionStorage.getItem('token')
+          || sessionStorage.getItem('accessToken')
+          || '';
+    });
+    
+    // 如果 localStorage 没有，尝试从登录接口响应获取（监听登录请求）
+    if (!accessToken) {
+      console.log('[DEBUG] localStorage 无 token，尝试从登录响应获取...');
+      // 这里可以扩展：监听登录请求的响应体
+    }
+    
+    if (accessToken) {
+      console.log(`    ✅ 获取到 access token (len=${accessToken.length})`);
+    } else {
+      console.warn('    ⚠️ 未找到 access token，尝试用 cookie 请求');
+    }
+  } catch (e) {
+    console.warn('    ⚠️ 获取 token 出错:', e.message);
+  }
+
+  // --- 第三步：确保所有认证 Cookie 已存入浏览器上下文 ---
   // 登录后，访问设置关键 Cookie 的路径，以确保它们被浏览器上下文捕获。
   // 即使是 HttpOnly Cookie，也会被 Playwright 的 request 上下文自动携带。
   console.log('[2.5/5] 访问关键路径以捕获所有认证 Cookie...');
@@ -354,31 +384,31 @@ if (!USERNAME || !PASSWORD) {
     console.log(`    Cookie: ${cookie.name}=${cookie.value} (domain: ${cookie.domain}, path: ${cookie.path}, httpOnly: ${cookie.httpOnly}, secure: ${cookie.secure})`);
   }
 
-  // 构建包含所有 Cookie 的字符串（包括 HttpOnly）
-  let cookieString = '';
-  for (const cookie of allCookies) {
-    cookieString += `${cookie.name}=${cookie.value}; `;
+  // 构建请求头：优先用 Bearer token，其次用 Cookie
+  const headers = {
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
+    'Content-Type': 'application/json',
+  };
+  if (accessToken) {
+    headers['Authorization'] = `Bearer ${accessToken}`;
+    console.log('[DEBUG] 使用 Bearer token 认证');
+  } else {
+    console.log('[DEBUG] 无 Bearer token，回退到 Cookie 认证');
   }
-  cookieString = cookieString.replace(/; $/, '');
-  console.log('[DEBUG] Constructed Cookie string for checkin:', cookieString || '(空)');
 
-  // --- 第三步：使用新登录会话进行签到 ---
-  // 使用 page.evaluate 发送请求，这样可以确保浏览器上下文中的所有 Cookie（包括 HttpOnly）都被自动携带
+  // --- 第四步：使用新登录会话进行签到 ---
   console.log('[3/5] 使用新登录会话进行签到...');
   console.log('[3.1/5] 发送签到请求...');
-  const checkinText = await page.evaluate(async (url) => {
+  const checkinText = await page.evaluate(async ({ url, headers }) => {
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({}),
       credentials: 'include' // 确保发送 Cookie
     });
     return await response.text();
-  }, CHECKIN_URL);
+  }, { url: CHECKIN_URL, headers });
 
   let checkinData;
   try { checkinData = JSON.parse(checkinText); } catch { checkinData = { raw: checkinText }; }
