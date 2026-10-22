@@ -12,8 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # 纯 HTTP 签到，只需刷新令牌（JWT，不绑 IP）
-      HCNSEC_REFRESH_TOKEN: ${{ secrets.HCNSEC_REFRESH_TOKEN }}
+      # 纯 HTTP 签到，使用个人访问令牌（Bearer token，不绑 IP）
+      HCNSEC_API_TOKEN: ${{ secrets.HCNSEC_API_TOKEN }}
     defaults:
       run:
         working-directory: ./src
