@@ -34,12 +34,14 @@ jobs:
       # ---------------------------------------------------------
       - name: Install dependencies
         run: npm ci
+        working-directory: ./src
 
       # ---------------------------------------------------------
       # 3. 安装 Playwright 浏览器
       # ---------------------------------------------------------
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
+        working-directory: ./src
 
       # ---------------------------------------------------------
       # 4. 运行签到
