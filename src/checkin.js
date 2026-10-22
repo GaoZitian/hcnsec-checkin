@@ -68,8 +68,8 @@ if (!USERNAME || !PASSWORD) {
         console.log(`[DEBUG RESPONSE] ${url} -> Set-Cookie:`, setCookie[0]?.split(';')[0]);
       }
     }
-    // 捕获登录接口响应，提取 access token
-    if (url.includes('/api/auth/login') || url.includes('/api/user/login') || url.includes('/login')) {
+    // 捕获登录接口响应，提取 access token - 扩大匹配范围
+    if (url.includes('/api/') && (url.includes('login') || url.includes('auth') || url.includes('signin') || url.includes('token'))) {
       try {
         const body = await response.json();
         console.log(`[DEBUG LOGIN RESPONSE] ${url}:`, JSON.stringify(body).slice(0, 500));
@@ -83,6 +83,24 @@ if (!USERNAME || !PASSWORD) {
         }
       } catch (e) {
         // 忽略解析错误
+      }
+    }
+    // 兜底：任何 200 的 API 响应都尝试提取 token
+    if (!accessToken && response.status() === 200 && url.includes('/api/')) {
+      try {
+        const body = await response.json();
+        if (body && (body.access_token || body.token || body.accessToken || body.data?.access_token || body.data?.token || body.data?.accessToken)) {
+          console.log(`[DEBUG API RESPONSE] ${url}:`, JSON.stringify(body).slice(0, 500));
+          accessToken = body.data?.access_token || body.data?.token || body.data?.accessToken 
+                       || body.access_token || body.token || body.accessToken
+                       || body.data?.data?.access_token || body.data?.data?.token || body.data?.data?.accessToken
+                       || '';
+          if (accessToken) {
+            console.log(`    ✅ 从 API 响应获取到 access token (len=${accessToken.length})`);
+          }
+        }
+      } catch (e) {
+        // 忽略
       }
     }
   });
