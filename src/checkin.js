@@ -57,7 +57,8 @@ if (!USERNAME || !PASSWORD) {
   page.setDefaultTimeout(60000);
   page.setDefaultNavigationTimeout(60000);
 
-  // 监听所有响应以捕获 Set-Cookie 头
+  // 监听所有响应以捕获 Set-Cookie 头和登录响应
+  let accessToken = '';
   page.on('response', async response => {
     const url = response.url();
     const setCookie = response.headers()['set-cookie'];
@@ -65,6 +66,23 @@ if (!USERNAME || !PASSWORD) {
       // 只记录我们关心的域的cookie
       if (url.includes('api.hcnsec.cn')) {
         console.log(`[DEBUG RESPONSE] ${url} -> Set-Cookie:`, setCookie[0]?.split(';')[0]);
+      }
+    }
+    // 捕获登录接口响应，提取 access token
+    if (url.includes('/api/auth/login') || url.includes('/api/user/login') || url.includes('/login')) {
+      try {
+        const body = await response.json();
+        console.log(`[DEBUG LOGIN RESPONSE] ${url}:`, JSON.stringify(body).slice(0, 500));
+        // 尝试多种可能的字段名
+        accessToken = body.data?.access_token || body.data?.token || body.data?.accessToken 
+                     || body.access_token || body.token || body.accessToken
+                     || body.data?.data?.access_token || body.data?.data?.token || body.data?.data?.accessToken
+                     || '';
+        if (accessToken) {
+          console.log(`    ✅ 从登录响应获取到 access token (len=${accessToken.length})`);
+        }
+      } catch (e) {
+        // 忽略解析错误
       }
     }
   });
@@ -303,34 +321,13 @@ if (!USERNAME || !PASSWORD) {
     process.exit(1);
   }
 
-  // --- 第二步：获取 access token（从 localStorage 或登录响应） ---
+  // --- 第二步：获取 access token（从登录响应已捕获） ---
   console.log('[2/5] 获取 access token...');
-  let accessToken = '';
-  try {
-    // 尝试从 localStorage 获取
-    accessToken = await page.evaluate(() => {
-      return localStorage.getItem('access_token') 
-          || localStorage.getItem('token') 
-          || localStorage.getItem('accessToken')
-          || sessionStorage.getItem('access_token')
-          || sessionStorage.getItem('token')
-          || sessionStorage.getItem('accessToken')
-          || '';
-    });
-    
-    // 如果 localStorage 没有，尝试从登录接口响应获取（监听登录请求）
-    if (!accessToken) {
-      console.log('[DEBUG] localStorage 无 token，尝试从登录响应获取...');
-      // 这里可以扩展：监听登录请求的响应体
-    }
-    
-    if (accessToken) {
-      console.log(`    ✅ 获取到 access token (len=${accessToken.length})`);
-    } else {
-      console.warn('    ⚠️ 未找到 access token，尝试用 cookie 请求');
-    }
-  } catch (e) {
-    console.warn('    ⚠️ 获取 token 出错:', e.message);
+  // accessToken 已在 page.on('response') 监听器中捕获
+  if (accessToken) {
+    console.log(`    ✅ 使用登录响应捕获的 access token (len=${accessToken.length})`);
+  } else {
+    console.warn('    ⚠️ 登录响应未捕获到 access token，尝试用 cookie 请求');
   }
 
   // --- 第三步：确保所有认证 Cookie 已存入浏览器上下文 ---
