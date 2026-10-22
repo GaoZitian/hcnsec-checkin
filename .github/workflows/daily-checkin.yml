@@ -10,7 +10,7 @@ jobs:
   checkin:
     name: Sign in
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       # 使用账号密码登录（Playwright 自动化）
       HCNSEC_USERNAME: ${{ secrets.HCNSEC_USERNAME }}
@@ -22,14 +22,27 @@ jobs:
       - uses: actions/checkout@v4
 
       # ---------------------------------------------------------
-      # 1. 安装 Node.js（>= 18 自带 fetch，无需 npm install）
+      # 1. 安装 Node.js
       # ---------------------------------------------------------
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
       # ---------------------------------------------------------
-      # 2. 运行签到（纯 HTTP，不启动浏览器）
+      # 2. 安装依赖
+      # ---------------------------------------------------------
+      - name: Install dependencies
+        run: npm ci
+
+      # ---------------------------------------------------------
+      # 3. 安装 Playwright 浏览器
+      # ---------------------------------------------------------
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # ---------------------------------------------------------
+      # 4. 运行签到
       # ---------------------------------------------------------
       - name: Run hcnsec check-in
         run: node checkin.js
